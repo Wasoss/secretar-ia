@@ -757,7 +757,7 @@ def main():
     app.add_handler(CommandHandler("resumen", lambda u, c: summary_service.send_daily_summary(c.bot, settings.mi_telegram_id)))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_texto))
-    app.add_handler(MessageHandler(filters.VOICE, recibir_audio))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.Document.AUDIO, recibir_audio))
     app.add_handler(CallbackQueryHandler(callback_completar, pattern="^(complete_|delete_)"))
 
     # Lifecycle hooks
