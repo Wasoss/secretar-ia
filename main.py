@@ -22,8 +22,12 @@ from application.services.ai_service import AIService, ActionType, ParsedIntent
 from application.services.calendar_service import CalendarService
 from application.services.reminder_service import ReminderService
 from application.services.summary_service import SummaryService
+from application.services.weekly_planning_service import WeeklyPlanningService
 from infrastructure.database.connection import init_db, close_pool
 from infrastructure.database.repositories.task_repo import TaskRepository, TaskType, TaskStatus, SubTask
+from infrastructure.database.repositories.plantilla_repo import PlantillaRepository
+from infrastructure.database.repositories.objetivo_repo import ObjetivoRepository
+from infrastructure.database.repositories.revision_repo import RevisionRepository
 
 load_dotenv()
 
@@ -36,7 +40,11 @@ ai_service: AIService = None
 calendar_service: CalendarService = None
 reminder_service: ReminderService = None
 summary_service: SummaryService = None
+weekly_planning_service: WeeklyPlanningService = None
 task_repo: TaskRepository = None
+plantilla_repo: PlantillaRepository = None
+objetivo_repo: ObjetivoRepository = None
+revision_repo: RevisionRepository = None
 
 ZONA_HORARIA = settings.tz
 
@@ -399,6 +407,34 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await handle_guardar_tarea_diaria(update, context, chat_id, intent)
         return
 
+    if intent.accion == ActionType.PLANTILLA_CREAR:
+        await handle_crear_plantilla(update, context, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.PLANTILLA_LISTAR:
+        await handle_listar_plantillas(update, chat_id)
+        return
+
+    if intent.accion == ActionType.PLANTILLA_ACTIVAR:
+        await handle_activar_plantilla(update, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.OBJETIVO_CREAR:
+        await handle_crear_objetivo(update, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.OBJETIVO_LISTAR:
+        await handle_listar_objetivos(update, chat_id)
+        return
+
+    if intent.accion == ActionType.OBJETIVO_PROGRESO:
+        await handle_progreso_objetivo(update, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.REVISION_SEMANAL:
+        await handle_revision_semanal(update, chat_id)
+        return
+
     # Acciones que guardan en BD: EVENTO, RECORDATORIO, NOTA
     await handle_guardar_tarea(update, context, chat_id, intent)
 
@@ -533,7 +569,184 @@ async def handle_guardar_tarea_diaria(update: Update, context: ContextTypes.DEFA
     await update.message.reply_text(mensaje, reply_markup=teclado, parse_mode=ParseMode.HTML)
 
 
-def _build_confirmation_message(intent: ParsedIntent, task_id: int, calendar_event_id: Optional[str]) -> str:
+# ============================================================
+# NUEVOS HANDLERS: Plantillas, Objetivos, Revisión Semanal
+# ============================================================
+
+async def handle_crear_plantilla(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                  chat_id: str, intent: ParsedIntent):
+    """Crea una plantilla diaria reutilizable desde texto libre."""
+    plantilla_id = await weekly_planning_service.create_plantilla_from_text(
+        telefono_id=chat_id,
+        texto=intent.detalles,
+        nombre=intent.tags[0] if intent.tags else None,
+    )
+    await update.message.reply_text(
+        f"📋 <b>Plantilla creada</b> (ID: {plantilla_id})\n"
+        f"📝 Items: {intent.detalles}\n"
+        f"✅ Ahora se aplicará cada mañana a las 6:30 AM",
+        parse_mode=ParseMode.HTML
+    )
+
+async def handle_listar_plantillas(update: Update, chat_id: str):
+    """Lista todas las plantillas del usuario."""
+    plantillas = await plantilla_repo.get_all(chat_id)
+
+    if not plantillas:
+        await update.message.reply_text(
+            "📋 No tenés plantillas guardadas.\n"
+            "Crea una diciendo: <i>\"Plantilla: cada día estudiar 2h, ejercicio\"</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    mensaje = "📋 <b>Tus plantillas:</b>\n\n"
+    for p in plantillas:
+        activa = " ✅ <b>ACTIVA</b>" if p.activa else ""
+        items_preview = ", ".join([item.get("texto", "")[:30] for item in p.items[:3]])
+        if len(p.items) > 3:
+            items_preview += f" ... y {len(p.items) - 3} más"
+        mensaje = f"▷ <b>{p.nombre}</b>{activa}\n  {items_preview}\n"
+
+    await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
+
+async def handle_activar_plantilla(update: Update, chat_id: str, intent: ParsedIntent):
+    """Activa una plantilla por nombre."""
+    nombre = intent.detalles.strip()
+    plantillas = await plantilla_repo.get_all(chat_id)
+
+    # Buscar por nombre (parcial, case-insensitive)
+    plantilla = None
+    for p in plantillas:
+        if nombre.lower() in p.nombre.lower():
+            plantilla = p
+            break
+
+    if not plantilla:
+        await update.message.reply_text(f"❌ No encontré plantilla: \"{nombre}\". Usá /plantillas para verlas.")
+        return
+
+    await plantilla_repo.set_active(chat_id, plantilla.id)
+    await update.message.reply_text(
+        f"✅ Plantilla activada: <b>{plantilla.nombre}</b>\n"
+        f"Se aplicará mañana a las 6:30 AM",
+        parse_mode=ParseMode.HTML
+    )
+
+async def handle_crear_objetivo(update: Update, chat_id: str, intent: ParsedIntent):
+    """Crea un objetivo semanal."""
+    # Parsear valor y unidad de la descripción
+    # Ej: "estudiar 10h/semana" -> valor=10, unidad="horas"
+    import re
+    texto = intent.detalles
+
+    # Intentar extraer valor y unidad
+    match = re.search(r'(\d+(?:\.\d+)?)\s*(h|hrs?|horas?|veces?|libros?|km|paginas?|minutos?)', texto, re.IGNORECASE)
+    if match:
+        valor = float(match.group(1))
+        unidad = match.group(2).lower()
+    else:
+        # Default si no se especifica
+        valor = 1
+        unidad = "veces"
+
+    objetivo_id = await weekly_planning_service.create_objetivo(
+        telefono_id=chat_id,
+        descripcion=intent.detalles,
+        objetivo_valor=valor,
+        objetivo_unidad=match.group(2) if match else "veces",
+    )
+
+    await update.message.reply_text(
+        f"🎯 <b>Objetivo creado</b> (ID: {objetivo_id})\n"
+        f"📝 {intent.detalles}\n"
+        f"📊 Meta: {valor} {match.group(2) if match else 'veces'}/semana\n"
+        f"📅 Para la semana actual",
+        parse_mode=ParseMode.HTML
+    )
+
+async def handle_listar_objetivos(update: Update, chat_id: str):
+    """Lista objetivos de la semana actual."""
+    objetivos = await objetivo_repo.get_active(chat_id)
+
+    if not objetivos:
+        await update.message.reply_text(
+            "🎯 No tenés objetivos para esta semana.\n"
+            "Crea uno: <i>\"Meta: estudiar 10h/semana\"</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    mensaje = "🎯 <b>Objetivos de esta semana:</b>\n\n"
+    for obj in objetivos:
+        emoji = obj.estado_emoji()
+        mensaje += f"{emoji} <b>{obj.descripcion}</b>\n"
+        mensaje += f"   Progreso: {obj.formatear_progreso()} ({obj.porcentaje:.1f}%)\n\n"
+
+    await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
+
+async def handle_progreso_objetivo(update: Update, chat_id: str, intent: ParsedIntent):
+    """Actualiza progreso de un objetivo."""
+    # Buscar objetivo por descripción
+    objetivos = await objetivo_repo.get_active(chat_id)
+
+    obj = None
+    for o in objetivos:
+        if intent.detalles.lower() in o.descripcion.lower() or o.descripcion.lower() in intent.detalles.lower():
+            obj = o
+            break
+
+    if not obj:
+        await update.message.reply_text("❌ No encontré ese objetivo. Usá /objetivos para verlos.")
+        return
+
+    # Extraer valor del progreso
+    import re
+    match = re.search(r'(\d+(?:\.\d+)?)', intent.detalles)
+    if not match:
+        await update.message.reply_text("❌ No pude identificar el progreso. Probá: \"Avancé 2h en estudio\"")
+        return
+
+    incremento = float(match.group(1))
+    await objetivo_repo.update_progress(obj.id, incremento)
+
+    # Obtener objetivo actualizado
+    obj_actualizado = await objetivo_repo.get_by_id(obj.id)
+
+    await update.message.reply_text(
+        f"📈 <b>Progreso actualizado</b>\n"
+        f"📝 {obj_actualizado.descripcion}\n"
+        f"📊 Progreso: {obj_actualizado.formatear_progreso()} ({obj_actualizado.porcentaje:.1f}%)\n"
+        + ("✅ ¡Objetivo completado!" if obj_actualizado.completado else ""),
+        parse_mode=ParseMode.HTML
+    )
+
+async def handle_revision_semanal(update: Update, chat_id: str):
+    """Genera y envía revisión semanal."""
+    await weekly_planning_service.send_weekly_review(
+        bot=update._bot,
+        chat_id=chat_id
+    )
+
+
+# Commands handlers
+async def ver_plantillas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /plantillas - Ver/gestionar plantillas."""
+    if not await verificar_usuario(update):
+        return
+    await handle_listar_plantillas(update, chat_id=str(update.message.chat_id))
+
+async def ver_objetivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /objetivos - Ver/crear objetivos semanales."""
+    if not await verificar_usuario(update):
+        return
+    await handle_listar_objetivos(update, chat_id=str(update.message.chat_id))
+
+async def ver_revision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /revision - Disparar revisión semanal manual."""
+    if not await verificar_usuario(update):
+        return
+    await handle_revision_semanal(update, chat_id=str(update.message.chat_id))
     """Construye mensaje de confirmación bonito."""
     icons = {
         ActionType.EVENTO: "📅",
@@ -895,24 +1108,42 @@ async def enviar_resumen_diario(context: ContextTypes.DEFAULT_TYPE):
 # --- STARTUP / MAIN ---
 async def post_init(application: Application):
     """Inicialización post-arranque: DB, servicios, jobs."""
-    global ai_service, calendar_service, reminder_service, summary_service, task_repo
+    global ai_service, calendar_service, reminder_service, summary_service, weekly_planning_service, task_repo, plantilla_repo, objetivo_repo, revision_repo
 
     logger.info("application_starting")
 
     # Inicializar DB
     await init_db()
 
-    # Crear servicios
+    # Crear servicios base
     ai_service = AIService()
     calendar_service = CalendarService()
     reminder_service = ReminderService()
 
-    # Pool y repo
+    # Pool y repos
     from infrastructure.database.connection import get_pool
     pool = await get_pool()
     task_repo = TaskRepository(pool)
+    plantilla_repo = PlantillaRepository(pool)
+    objetivo_repo = ObjetivoRepository(pool)
+    revision_repo = RevisionRepository(pool)
 
     summary_service = SummaryService(task_repo, calendar_service, ai_service)
+    weekly_planning_service = WeeklyPlanningService(
+        task_repo=task_repo,
+        plantilla_repo=plantilla_repo,
+        objetivo_repo=objetivo_repo,
+        revision_repo=revision_repo,
+        calendar_service=calendar_service,
+        ai_service=ai_service,
+    )
+
+    # Job diario a las 6:30 AM - Aplicar plantilla diaria
+    hora_plantilla = datetime.time(hour=6, minute=30, tzinfo=ZONA_HORARIA)
+    application.job_queue.run_daily(
+        lambda ctx: weekly_planning_service.apply_daily_template(settings.mi_telegram_id),
+        time=hora_plantilla
+    )
 
     # Job diario a las 6:50 AM (resumen matutino)
     hora_envio = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
@@ -925,7 +1156,16 @@ async def post_init(application: Application):
         time=hora_vespertino
     )
 
-    logger.info("application_ready", services=["ai", "calendar", "reminder", "summary", "db"])
+    # Job semanal: Domingo 10:00 AM - Revisión semanal
+    from datetime import time
+    hora_revision = time(hour=10, minute=0, tzinfo=ZONA_HORARIA)
+    application.job_queue.run_daily(
+        lambda ctx: weekly_planning_service.send_weekly_review(ctx.bot, settings.mi_telegram_id),
+        time=hora_revision,
+        days=(6,)  # Domingo = 6 (0=Lunes, 6=Domingo)
+    )
+
+    logger.info("application_ready", services=["ai", "calendar", "reminder", "summary", "weekly_planning", "db"])
 
 
 async def post_shutdown(application: Application):
@@ -948,6 +1188,9 @@ def main():
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("tag", filtrar_tag))
     app.add_handler(CommandHandler("pendientes", ver_pendientes))
+    app.add_handler(CommandHandler("plantillas", ver_plantillas))
+    app.add_handler(CommandHandler("objetivos", ver_objetivos))
+    app.add_handler(CommandHandler("revision", ver_revision))
     app.add_handler(CommandHandler("resumen", lambda u, c: summary_service.send_daily_summary(c.bot, settings.mi_telegram_id)))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_texto))

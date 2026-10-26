@@ -119,7 +119,58 @@ async def init_db() -> None:
             )
         """)
 
-    logger.info("database_initialized", tables=["tareas", "credenciales"])
+        # Tabla de plantillas diarias
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS plantillas_diarias (
+                id SERIAL PRIMARY KEY,
+                telefono_id TEXT NOT NULL,
+                nombre TEXT NOT NULL,
+                items_json JSONB NOT NULL,  -- Array de {texto, orden}
+                activa BOOLEAN NOT NULL DEFAULT TRUE,
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_plantillas_telefono_activa
+            ON plantillas_diarias (telefono_id, activa)
+        """)
+
+        # Tabla de objetivos semanales
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS objetivos_semanales (
+                id SERIAL PRIMARY KEY,
+                telefono_id TEXT NOT NULL,
+                descripcion TEXT NOT NULL,  -- "estudiar 10h/semana"
+                objetivo_valor NUMERIC NOT NULL,  -- 10
+                objetivo_unidad TEXT NOT NULL,  -- "horas", "veces", "libros", "km"
+                semana_inicio DATE NOT NULL,  -- Lunes de la semana (YYYY-MM-DD)
+                valor_actual NUMERIC NOT NULL DEFAULT 0,
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_objetivos_telefono_semana
+            ON objetivos_semanales (telefono_id, semana_inicio)
+        """)
+
+        # Tabla de revisiones semanales (log histórico)
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS revisiones_semanales (
+                id SERIAL PRIMARY KEY,
+                telefono_id TEXT NOT NULL,
+                semana_inicio DATE NOT NULL,
+                resumen_json JSONB NOT NULL,  -- {tareas_completadas, eventos, objetivos, plantillas_usadas, notas}
+                creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_revisiones_telefono_semana
+            ON revisiones_semanales (telefono_id, semana_inicio)
+        """)
+
+    logger.info("database_initialized", tables=["tareas", "credenciales", "plantillas_diarias", "objetivos_semanales", "revisiones_semanales"])
 
 
 async def _run_migrations(pool: asyncpg.Pool) -> None:

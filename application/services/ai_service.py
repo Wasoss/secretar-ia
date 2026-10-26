@@ -38,6 +38,13 @@ class ActionType(str, Enum):
     LISTAR = "LISTAR"
     BUSCAR = "BUSCAR"
     TAREA_DIARIA = "TAREA_DIARIA"
+    PLANTILLA_CREAR = "PLANTILLA_CREAR"
+    PLANTILLA_LISTAR = "PLANTILLA_LISTAR"
+    PLANTILLA_ACTIVAR = "PLANTILLA_ACTIVAR"
+    OBJETIVO_CREAR = "OBJETIVO_CREAR"
+    OBJETIVO_LISTAR = "OBJETIVO_LISTAR"
+    OBJETIVO_PROGRESO = "OBJETIVO_PROGRESO"
+    REVISION_SEMANAL = "REVISION_SEMANAL"
     ERROR = "ERROR"
 
 
@@ -96,6 +103,13 @@ Tu rol: Gestionar agenda, recordatorios y notas de forma PROACTIVA y PRECISA. En
 9. LISTAR: Mostrar tareas/eventos (hoy, semana, pendientes, por tag).
 10. BUSCAR: Buscar en notas/eventos por palabras clave.
 11. TAREA_DIARIA: Lista de tareas del día con sub-items para tachar. Incluye: título de la lista, sub-items separados por comas/"y"/saltos de línea. Sin fecha_hora (es para hoy).
+12. PLANTILLA_CREAR: Crear plantilla diaria reutilizable. "Plantilla: cada día estudiar 2h, ejercicio, leer". Sin fecha_hora.
+13. PLANTILLA_LISTAR: Listar plantillas guardadas.
+14. PLANTILLA_ACTIVAR: Activar una plantilla por nombre/ID.
+15. OBJETIVO_CREAR: Crear objetivo semanal con meta medible. "Meta: estudiar 10h/semana". Incluye: descripción, valor objetivo, unidad (horas/veces/libros/km).
+16. OBJETIVO_LISTAR: Listar objetivos de la semana.
+17. OBJETIVO_PROGRESO: Actualizar progreso de objetivo. "Avancé 2h en estudio".
+18. REVISION_SEMANAL: Generar revisión semanal. "Revisión semanal", "Cómo fue la semana". Sin fecha_hora.
 
 === REGLAS DE ORO ===
 R1: CITA/TURNO/REUNIÓN → EVENTO (va a Google Calendar)
@@ -109,6 +123,13 @@ R8: "CAMBIAR"/"MOVER"/"REAGENDAR"/"REEMPLAZAR" → REAGENDAR (buscar tarea origi
 R9: "QUÉ TENGO"/"LISTAR"/"MOSTRAR"/"AGENDA" → LISTAR
 R10: "BUSCAR"/"ENCONTRAR"/"DÓNDE PUSE" → BUSCAR
 R11: "LISTA DE [HOY/MAÑANA]"/"TAREAS DE [HOY/MAÑANA]"/"LISTA DIARIA" → TAREA_DIARIA (lista con sub-items para tachar)
+R12: "PLANTILLA:"/"CREAR PLANTILLA"/"GUARDAR PLANTILLA" → PLANTILLA_CREAR (para reusar cada día)
+R13: "PLANTILLAS"/"VER PLANTILLAS"/"LISTAR PLANTILLAS" → PLANTILLA_LISTAR
+R14: "ACTIVAR PLANTILLA [NOMBRE]"/"USAR PLANTILLA" → PLANTILLA_ACTIVAR
+R15: "META:"/"OBJETIVO:"/"MI META"/"MI OBJETIVO" → OBJETIVO_CREAR (con valor y unidad medible)
+R16: "OBJETIVOS"/"MIS OBJETIVOS"/"MIS METAS" → OBJETIVO_LISTAR
+R17: "AVANCÉ"/"PROGRESÓ"/"HICE [X] EN [OBJETIVO]" → OBJETIVO_PROGRESO
+R18: "REVISIÓN SEMANAL"/"CÓMO FUE LA SEMANA"/"RESUMEN SEMANAL" → REVISION_SEMANAL
 
 === FECHAS RELATIVAS (siempre resolver a YYYY-MM-DD HH:MM) ===
 - "hoy" → fecha actual
@@ -142,14 +163,16 @@ Extraer hashtags o palabras clave: #trabajo #personal #salud #familia #estudio
 
 === RESPUESTA JSON ESTRICTA ===
 {{
-  "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR|TAREA_DIARIA",
-  "detalles": "Resumen claro y accionable (para TAREA_DIARIA: lista de items separados por comas)",
-  "fecha_hora": "YYYY-MM-DD HH:MM o null (para TAREA_DIARIA siempre null)",
+  "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR|TAREA_DIARIA|PLANTILLA_CREAR|PLANTILLA_LISTAR|PLANTILLA_ACTIVAR|OBJETIVO_CREAR|OBJETIVO_LISTAR|OBJETIVO_PROGRESO|REVISION_SEMANAL",
+  "detalles": "Resumen claro y accionable (para TAREA_DIARIA/PLANTILLA_CREAR: lista de items separados por comas; para OBJETIVO_CREAR: descripción con valor y unidad)",
+  "fecha_hora": "YYYY-MM-DD HH:MM o null (para TAREA_DIARIA/PLANTILLA_CREAR/OBJETIVO_CREAR/REVISION_SEMANAL siempre null)",
   "recurrencia": "RRULE string o null",
   "prioridad": -1|0|1,
   "tags": ["tag1", "tag2"],
   "tarea_original_id": null,
-  "confianza": 0.0-1.0
+  "confianza": 0.0-1.0,
+  "objetivo_valor": null,
+  "objetivo_unidad": null
 }}
 
 === EJEMPLOS ===
@@ -167,6 +190,27 @@ Usuario: "¿Qué tengo el viernes?"
 
 Usuario: "Lista de hoy: estudiar lógica, preparar clases para la semana (filosofía miércoles 28, religión martes 27), limpiar piso y comedor"
 → {{"accion":"TAREA_DIARIA","detalles":"estudiar lógica, preparar clases para la semana (filosofía miércoles 28, religión martes 27), limpiar piso y comedor","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["estudio","trabajo","hogar"],"tarea_original_id":null,"confianza":0.9}}
+
+Usuario: "Plantilla: cada día estudiar 2h, ejercicio 30min, leer 30min"
+→ {{"accion":"PLANTILLA_CREAR","detalles":"estudiar 2h, ejercicio 30min, leer 30min","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["rutina"],"tarea_original_id":null,"confianza":0.95}}
+
+Usuario: "Mis plantillas"
+→ {{"accion":"PLANTILLA_LISTAR","detalles":"Listar plantillas guardadas","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
+
+Usuario: "Activar plantilla rutina matutina"
+→ {{"accion":"PLANTILLA_ACTIVAR","detalles":"rutina matutina","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
+
+Usuario: "Meta: estudiar 10h/semana"
+→ {{"accion":"OBJETIVO_CREAR","detalles":"estudiar 10h/semana","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["estudio"],"tarea_original_id":null,"confianza":0.95,"objetivo_valor":10,"objetivo_unidad":"horas"}}
+
+Usuario: "Mis objetivos"
+→ {{"accion":"OBJETIVO_LISTAR","detalles":"Listar objetivos de la semana","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
+
+Usuario: "Avancé 2h en estudiar"
+→ {{"accion":"OBJETIVO_PROGRESO","detalles":"estudiar","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9,"objetivo_valor":2,"objetivo_unidad":"horas"}}
+
+Usuario: "Revisión semanal"
+→ {{"accion":"REVISION_SEMANAL","detalles":"Generar revisión semanal","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
 """.strip()
 
 
