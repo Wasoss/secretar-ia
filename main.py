@@ -625,17 +625,37 @@ async def recibir_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para notas de voz y audios."""
     if not await verificar_usuario(update):
         return
 
-    archivo = await update.message.voice.get_file()
+    # Debug: loguear tipo de mensaje
+    msg = update.message
+    logger.info("audio_handler_triggered",
+                has_voice=bool(msg.voice),
+                has_audio=bool(msg.audio),
+                has_document=bool(msg.document))
+
+    # Soportar voice (🎤), audio (📎 audio) y document audio
+    voice = msg.voice or msg.audio
+    if not voice:
+        if msg.document and msg.document.mime_type and msg.document.mime_type.startswith('audio/'):
+            voice = msg.document
+        else:
+            logger.warning("audio_no_voice_attribute", message_type=type(msg).__name__)
+            await update.message.reply_text("❌ No detecté audio en el mensaje.")
+            return
+
+    archivo = await voice.get_file()
     ruta_audio = "nota_de_voz.ogg"
     await archivo.download_to_drive(ruta_audio)
 
     transcripcion = await ai_service.transcribe_audio(ruta_audio)
     if transcripcion:
+        logger.info("audio_transcribed_ok", length=len(transcripcion))
         await procesar_peticion(update, context, transcripcion)
     else:
+        logger.warning("audio_transcription_empty")
         await update.message.reply_text("❌ No pude transcribir el audio.")
 
     try:
