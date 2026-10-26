@@ -1,6 +1,9 @@
 import os
 import psycopg2
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Obtener la URL de conexión desde las variables de entorno
 DATABASE_URL = os.getenv("DATABASE_URL")

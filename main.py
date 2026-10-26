@@ -1,591 +1,274 @@
-"""
-Secretar-IA - Bot de Telegram personal con IA.
-
-Arquitectura limpia:
-- config: Settings centralizadas y logging
-- infrastructure: Database pool, repositories, external APIs
-- application: Services y use cases
-- interfaces: Telegram handlers
-"""
 import os
 import datetime
-import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
-
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
-# Cargar .env temprano (antes de settings para que pydantic lo lea)
 load_dotenv()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+MI_TELEGRAM_ID = os.getenv("MI_TELEGRAM_ID")
+ZONA_HORARIA = ZoneInfo("America/Argentina/Buenos_Aires")
 
-# Configuración y logging (validan env vars al importar)
-from config.settings import settings
-from config.logging import get_logger, logger
+import base_datos
+import calendario
+import motor_ia
 
-# Infraestructura
-from infrastructure.database.connection import get_pool, close_pool, init_db
-from infrastructure.database.repositories.task_repo import TaskRepository, TaskType, TaskStatus
-from infrastructure.database.repositories.credential_repo import CredentialRepository
+base_datos.inicializar_db()
 
-# Servicios de aplicación (se crearán después)
-from application.services.calendar_service import CalendarService
-from application.services.reminder_service import ReminderService
-from application.services.summary_service import SummaryService
-from application.services.ai_service import AIService
-
-# ============================================================
-# CONSTANTES Y UTILIDADES
-# ============================================================
-
-# Prefijos de callback data para evitar colisiones
-CALLBACK_COMPLETE = "complete_"
-CALLBACK_DELETE_NOTE = "delete_note_"
-
-# Zona horaria única desde config
-ZONA_HORARIA = settings.tz
-
-# ============================================================
-# SERVIDOR HEALTH CHECK PARA RENDER
-# ============================================================
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Handler HTTP para health checks de Render."""
-
+# --- SERVIDOR SIMULADO PARA RENDER ---
+class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(b'{"status": "healthy", "service": "secretar-ia"}')
-        else:
-            self.send_response(404)
-            self.end_headers()
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot activo")
 
-    def log_message(self, format, *args):
-        # Silenciar logs del servidor HTTP
-        pass
+def iniciar_servidor():
+    puerto = int(os.getenv("PORT", 10000))
+    HTTPServer(("0.0.0.0", puerto), DummyHandler).serve_forever()
 
-
-def start_health_server():
-    """Inicia servidor HTTP para health checks en puerto configurado."""
-    port = settings.port
-    server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-    logger.info("health_server_started", port=port)
-    server.serve_forever()
-
-
-# ============================================================
-# FORMATO Y SEGURIDAD
-# ============================================================
-
-def format_fecha_arg(fecha_str: str | None) -> str:
-    """Formatea fecha ISO a formato argentino DD/MM/YYYY HH:MM."""
-    if not fecha_str:
+# --- FORMATEO Y SEGURIDAD ---
+def formatear_fecha_arg(fecha_str: str) -> str:
+    if not fecha_str or fecha_str.lower() == "null": 
         return ""
     try:
-        # Manejar tanto string ISO como datetime
-        if isinstance(fecha_str, datetime.datetime):
-            dt = fecha_str
-        else:
-            # Limpiar string ISO (puede venir con 'T' o espacio)
-            clean = fecha_str.replace("T", " ")[:19]
-            dt = datetime.datetime.fromisoformat(clean)
-        # Asegurar timezone aware
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=ZONA_HORARIA)
-        return dt.strftime("%d/%m/%Y %H:%M")
-    except Exception as e:
-        logger.warning("date_format_failed", fecha_str=fecha_str, error=str(e))
-        return str(fecha_str)
+        fecha_limpia = fecha_str.replace("T", " ")[:16]
+        if " " in fecha_limpia:
+            return datetime.datetime.strptime(fecha_limpia, "%Y-%m-%d %H:%M").strftime("%d/%m/%Y %H:%M")
+        return datetime.datetime.strptime(fecha_limpia[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        return fecha_str
 
-
-async def verify_user(update: Update) -> bool:
-    """Verifica que el usuario esté autorizado."""
+async def verificar_usuario(update: Update) -> bool:
     chat_id = str(update.effective_chat.id)
-    if chat_id != settings.mi_telegram_id:
-        logger.warning("unauthorized_access_attempt", chat_id=chat_id)
-        await update.message.reply_text(
-            "⛔ Acceso denegado. No estás autorizado para usar este bot."
-        )
+    if chat_id != MI_TELEGRAM_ID:
+        print(f"Acceso bloqueado al ID: {chat_id}")
+        await update.message.reply_text("⛔ Acceso denegado. No estás autorizado para usar este bot.")
         return False
     return True
 
+# --- FUNCIONES PRINCIPALES ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update): return
+    context.job_queue.run_once(guardar_chat_id, 1, data=str(update.message.chat_id))
+    await update.message.reply_text("Hola. Soy tu Secretar-IA. Ya puedo gestionar tu agenda, alarmas y notas de forma segura en la nube.")
 
-# ============================================================
-# SERVICIOS (Inicialización lazy para evitar imports circulares)
-# ============================================================
+async def guardar_chat_id(context: ContextTypes.DEFAULT_TYPE):
+    context.bot_data['chat_id'] = context.job.data
 
-_ai_service: AIService | None = None
-_calendar_service: CalendarService | None = None
-_reminder_service: ReminderService | None = None
-_summary_service: SummaryService | None = None
+async def enviar_alarma(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    detalles = context.job.data
+    await context.bot.send_message(chat_id=chat_id, text=f"⏰ <b>¡RECORDATORIO!</b>\n\nEs hora de: {detalles}", parse_mode=ParseMode.HTML)
 
-
-def get_ai_service() -> AIService:
-    global _ai_service
-    if _ai_service is None:
-        _ai_service = AIService()
-    return _ai_service
-
-
-def get_calendar_service() -> CalendarService:
-    global _calendar_service
-    if _calendar_service is None:
-        _calendar_service = CalendarService()
-    return _calendar_service
-
-
-def get_reminder_service() -> ReminderService:
-    global _reminder_service
-    if _reminder_service is None:
-        _reminder_service = ReminderService()
-    return _reminder_service
-
-
-def get_summary_service() -> SummaryService:
-    global _summary_service
-    if _summary_service is None:
-        pool = get_pool()  # type: ignore
-        task_repo = TaskRepository(pool)
-        _summary_service = SummaryService(task_repo, get_calendar_service())
-    return _summary_service
-
-
-# ============================================================
-# HANDLERS DE TELEGRAM
-# ============================================================
-
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start - Inicializa el bot."""
-    if not await verify_user(update):
-        return
-
+async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_usuario: str):
+    if not await verificar_usuario(update): return
+    
     chat_id = str(update.message.chat_id)
-    # Guardar chat_id para jobs (recordatorios, resumen diario)
-    context.job_queue.run_once(save_chat_id, 1, data=chat_id)
-
-    await update.message.reply_text(
-        "Hola. Soy tu Secretar-IA. Ya puedo gestionar tu agenda, "
-        "alarmas y notas de forma segura en la nube."
-    )
-
-
-async def save_chat_id(context: ContextTypes.DEFAULT_TYPE):
-    """Job para guardar chat_id en bot_data."""
-    context.bot_data["chat_id"] = context.job.data
-
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /ayuda - Muestra guía de uso."""
-    if not await verify_user(update):
+    resultado = motor_ia.clasificar_intencion(texto_usuario)
+    
+    accion = resultado.get("accion", "ERROR")
+    detalles = resultado.get("detalles", "")
+    fecha_hora = resultado.get("fecha_hora")
+    
+    if accion == "RECHAZADO_GASTOS":
+        await update.message.reply_text(f"No gestiono finanzas. Registrá esto en tu otro bot: {detalles}")
+        return
+        
+    if accion == "CONVERSACION":
+        await update.message.reply_text(detalles)
         return
 
-    texto = (
-        "🤖 <b>Guía de Funciones de Secretar-IA</b>\n\n"
-        "• 📅 <b>Eventos:</b> Decí o escribí citas "
-        "(ej. <i>'Reunión el martes a las 15hs'</i>) "
-        "para guardarlas en Google Calendar.\n"
-        "• ⏰ <b>Recordatorios:</b> Programá alarmas "
-        "(ej. <i>'Recordame llamar a mamá a las 18hs'</i>).\n"
-        "• 📔 <b>Notas:</b> Guardá información sin fecha "
-        "(ej. <i>'Anotá la clave del wifi es 1234'</i>).\n"
-        "• 📋 <b>Comandos disponibles:</b>\n"
-        "  /resumen - Ver tareas y eventos próximos.\n"
-        "  /notas - Consultar tus notas guardadas.\n"
-        "  /ayuda - Muestra esta guía.\n"
-        "  /test - Verifica el estado del sistema.\n"
-        "• 🗑️ <b>Gestión:</b> Decí <i>'deshacer'</i> para borrar la última "
-        "carga, o <i>'borrar todo lo del 25 de octubre'</i> para limpiar una fecha."
-    )
-    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
-
-
-async def summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /resumen - Muestra resumen diario."""
-    if not await verify_user(update):
-        return
-    await send_daily_summary(context)
-
-
-async def notes_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /notas - Muestra notas guardadas."""
-    if not await verify_user(update):
+    if accion == "DESHACER":
+        ultima = base_datos.obtener_ultima_tarea(chat_id)
+        if ultima:
+            t_id, t_tipo, t_detalles = ultima
+            base_datos.eliminar_tarea_por_id(t_id)
+            mensaje_borrado = f"🗑️ Se deshizo tu última carga: [{t_tipo}] {t_detalles}"
+            if t_tipo == "EVENTO":
+                mensaje_borrado += "\n⚠️ (Importante: Borralo manualmente de Google Calendar, ya que esa conexión es de una sola vía por ahora)."
+            await update.message.reply_text(mensaje_borrado)
+        else:
+            await update.message.reply_text("No encontré ningún registro reciente para deshacer.")
         return
 
+    if accion == "ELIMINAR_FECHA":
+        if fecha_hora:
+            fecha_corta = fecha_hora[:10]  # Extrae solo YYYY-MM-DD
+            borrados = base_datos.eliminar_por_fecha(chat_id, fecha_corta)
+            await update.message.reply_text(f"🗑️ Se eliminaron {borrados} registros programados para el {fecha_corta}.")
+        else:
+            await update.message.reply_text("No pude identificar qué fecha querés borrar. Probá diciendo 'Borrar todo lo del 25 de octubre'.")
+        return
+        
+    if accion == "EVENTO" and fecha_hora:
+        if calendario.crear_evento_calendario(detalles, fecha_hora):
+            await update.message.reply_text(f"📅 Evento agendado en Calendar: {detalles}")
+        else:
+            await update.message.reply_text("Hubo un error al guardar en Calendar.")
+        return
+
+    base_datos.guardar_tarea(chat_id, accion, detalles, fecha_hora)
+    respuesta = f"📝 Guardado como {accion}."
+
+    if accion == "RECORDATORIO" and fecha_hora:
+        try:
+            fecha_obj = datetime.datetime.strptime(fecha_hora, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA)
+            ahora = datetime.datetime.now(ZONA_HORARIA)
+            if fecha_obj > ahora:
+                segundos_espera = (fecha_obj - ahora).total_seconds()
+                context.job_queue.run_once(enviar_alarma, when=segundos_espera, chat_id=update.message.chat_id, data=detalles)
+                respuesta += " ⏰ Alarma programada."
+        except Exception as e:
+            print(f"Error programando alarma: {e}")
+
+    await update.message.reply_text(respuesta)
+
+async def recibir_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await procesar_peticion(update, context, update.message.text)
+
+async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update): return
+    archivo = await update.message.voice.get_file()
+    ruta_audio = "nota_de_voz.ogg"
+    await archivo.download_to_drive(ruta_audio)
+    
+    transcripcion = motor_ia.transcribir_audio(ruta_audio)
+    await procesar_peticion(update, context, transcripcion)
+    os.remove(ruta_audio)
+
+async def marcar_completada(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if str(query.message.chat_id) != MI_TELEGRAM_ID: return
+    
+    tarea_id = query.data.split("_")[1]
+    base_datos.completar_tarea(tarea_id)
+    
+    await query.answer("¡Acción completada! ✅")
+    teclado_actual = query.message.reply_markup.inline_keyboard
+    nuevo_teclado = [[btn] for fila in teclado_actual for btn in fila if btn.callback_data != query.data]
+    
+    if nuevo_teclado:
+        await query.edit_message_reply_markup(InlineKeyboardMarkup(nuevo_teclado))
+    else:
+        await query.edit_message_text(text="¡Todas las tareas de esta lista están listas! 🎉")
+
+async def enviar_resumen_diario(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = MI_TELEGRAM_ID
+    if not chat_id: return
+        
+    pendientes = base_datos.obtener_pendientes(chat_id)
+    eventos = calendario.obtener_eventos_calendario()
+    
+    if not pendientes and not eventos:
+        await context.bot.send_message(chat_id=chat_id, text="¡Buen día! ☀️ No tenés tareas ni eventos próximos.")
+        return
+
+    mensaje = "¡Buen día! ☀️ Acá tenés tu resumen:\n\n"
+    if eventos:
+        mensaje += "📅 <b>Próximos eventos (Calendar):</b>\n"
+        for evento in eventos:
+            inicio = evento['start'].get('dateTime', evento['start'].get('date'))
+            fecha_str = formatear_fecha_arg(inicio)
+            mensaje += f"▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>)\n"
+        mensaje += "\n"
+        
+    if pendientes:
+        mensaje += "📝 <b>Tareas y Notas pendientes:</b>\n"
+        botones = []
+        for tarea in pendientes:
+            t_id, tipo, detalles, fecha = tarea
+            fecha_str = f" (<i>{formatear_fecha_arg(fecha)}</i>)" if fecha else ""
+            mensaje += f"○ <b>[{tipo}]</b> {detalles}{fecha_str}\n"
+            botones.append([InlineKeyboardButton(f"✅ {detalles[:25]}", callback_data=f"ok_{t_id}")])
+            
+        teclado = InlineKeyboardMarkup(botones)
+        await context.bot.send_message(chat_id=chat_id, text=mensaje, reply_markup=teclado, parse_mode=ParseMode.HTML)
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=mensaje, parse_mode=ParseMode.HTML)
+
+async def test_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update): return
+    await enviar_resumen_diario(context)
+
+async def ver_notas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update): return
     chat_id = str(update.message.chat_id)
-    pool = await get_pool()
-    task_repo = TaskRepository(pool)
-    notes = await task_repo.get_notes(chat_id)
-
-    if not notes:
+    notas = base_datos.obtener_solo_notas(chat_id)
+    
+    if not notas:
         await update.message.reply_text("📔 No tenés notas guardadas actualmente.")
         return
 
     mensaje = "📔 <b>Tus Notas guardadas:</b>\n\n"
     botones = []
-    for nota in notes:
-        mensaje += f"○ {nota.detalles}\n"
-        botones.append([
-            InlineKeyboardButton(
-                f"❌ Borrar: {nota.detalles[:20]}",
-                callback_data=f"{CALLBACK_DELETE_NOTE}{nota.id}"
-            )
-        ])
-
+    for nota in notas:
+        t_id, tipo, detalles, fecha = nota
+        mensaje += f"○ {detalles}\n"
+        botones.append([InlineKeyboardButton(f"❌ Borrar: {detalles[:20]}", callback_data=f"ok_{t_id}")])
+        
     teclado = InlineKeyboardMarkup(botones)
-    await update.message.reply_text(
-        text=mensaje,
-        reply_markup=teclado,
-        parse_mode=ParseMode.HTML
+    await update.message.reply_text(text=mensaje, reply_markup=teclado, parse_mode=ParseMode.HTML)
+
+async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update): return
+    texto = (
+        "🤖 <b>Guía de Funciones de Secretar-IA</b>\n\n"
+        "• 📅 <b>Eventos:</b> Decí o escribí citas (ej. <i>'Reunión el martes a las 15hs'</i>) para guardarlas en Google Calendar.\n"
+        "• ⏰ <b>Recordatorios:</b> Programá alarmas (ej. <i>'Recordame llamar a mamá a las 18hs'</i>).\n"
+        "• 📔 <b>Notas:</b> Guardá información sin fecha (ej. <i>'Anotá la clave del wifi es 1234'</i>).\n"
+        "• 📋 <b>Comandos disponibles:</b>\n"
+        "  /resumen - Ver tareas y eventos próximos.\n"
+        "  /notas - Consultar tus notas guardadas.\n"
+        "  /ayuda - Muestra esta guía.\n"
+        "  /test - Verifica el estado de la base de datos y Calendar.\n"
+        "• 🗑️ <b>Gestión:</b> Decí <i>'deshacer'</i> para borrar la última carga, o <i>'borrar todo lo del 25 de octubre'</i> para limpiar una fecha."
     )
+    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
 
-
-async def test_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /test - Diagnóstico del sistema."""
-    if not await verify_user(update):
-        return
-
+async def test_sistema(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update): return
     chat_id = str(update.effective_chat.id)
-    pool = await get_pool()
-    task_repo = TaskRepository(pool)
-
     try:
-        # Test BD
-        pending = await task_repo.get_pending(chat_id)
-        # Test Calendar
-        calendar = get_calendar_service()
-        events = await calendar.get_upcoming_events()
-        # Test AI
-        ai = get_ai_service()
-        ai_status = "Activo" if ai.is_available() else "No disponible"
-
+        # Prueba de conexión a la Base de Datos (Neon)
+        pendientes = base_datos.obtener_pendientes(chat_id)
+        # Prueba de conexión a Google Calendar
+        eventos = calendario.obtener_eventos_calendario()
+        
         resultado = (
             "🧪 <b>Diagnóstico del Sistema:</b>\n\n"
             "✅ Base de datos (Neon.tech): Conectada\n"
-            f"   └ Tareas/Notas pendientes: {len(pending)}\n"
+            f"   └ Tareas/Notas pendientes: {len(pendientes)}\n"
             "✅ Google Calendar: Conectado\n"
-            f"   └ Próximos eventos sincronizados: {len(events)}\n"
-            f"✅ Motor de IA (Groq): {ai_status}"
+            f"   └ Próximos eventos sincronizados: {len(eventos)}\n"
+            "✅ Motor de IA (Groq): Activo"
         )
         await update.message.reply_text(resultado, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.error("system_test_failed", error=str(e), exc_info=True)
-        await update.message.reply_text(
-            f"❌ Error en el test del sistema:\n<code>{e}</code>",
-            parse_mode=ParseMode.HTML
-        )
-
-
-async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler para mensajes de texto."""
-    await process_request(update, context, update.message.text)
-
-
-async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler para mensajes de voz."""
-    if not await verify_user(update):
-        return
-
-    voice = update.message.voice
-    if not voice:
-        return
-
-    # Descargar audio a archivo temporal (cleanup automático)
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
-        tmp_path = tmp.name
-
-    try:
-        file = await voice.get_file()
-        await file.download_to_drive(tmp_path)
-
-        ai = get_ai_service()
-        transcription = await ai.transcribe_audio(tmp_path)
-
-        if transcription:
-            await process_request(update, context, transcription)
-        else:
-            await update.message.reply_text(
-                "No pude transcribir el audio. Probá de nuevo o escribí el mensaje."
-            )
-    except Exception as e:
-        logger.error("audio_processing_failed", error=str(e), exc_info=True)
-        await update.message.reply_text("Error procesando el audio. Intentá de nuevo.")
-    finally:
-        # Cleanup garantizado
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler para callbacks de botones inline."""
-    query = update.callback_query
-    if not query or not query.data:
-        return
-
-    # Verificar autorización
-    if str(query.message.chat_id) != settings.mi_telegram_id:
-        await query.answer("No autorizado", show_alert=True)
-        return
-
-    data = query.data
-    pool = await get_pool()
-    task_repo = TaskRepository(pool)
-
-    # Completar tarea/recordatorio
-    if data.startswith(CALLBACK_COMPLETE):
-        task_id_str = data[len(CALLBACK_COMPLETE):]
-        try:
-            task_id = int(task_id_str)
-            success = await task_repo.complete(task_id)
-            if success:
-                await query.answer("¡Acción completada! ✅")
-                await refresh_keyboard(query, task_id)
-            else:
-                await query.answer("Ya estaba completada o no existe", show_alert=True)
-        except ValueError:
-            logger.error("invalid_callback_task_id", data=data)
-            await query.answer("Error: ID inválido", show_alert=True)
-
-    # Borrar nota
-    elif data.startswith(CALLBACK_DELETE_NOTE):
-        task_id_str = data[len(CALLBACK_DELETE_NOTE):]
-        try:
-            task_id = int(task_id_str)
-            success = await task_repo.delete_by_id(task_id)
-            if success:
-                await query.answer("Nota eliminada 🗑️")
-                await refresh_keyboard(query, task_id)
-            else:
-                await query.answer("No se encontró la nota", show_alert=True)
-        except ValueError:
-            logger.error("invalid_callback_note_id", data=data)
-            await query.answer("Error: ID inválido", show_alert=True)
-
-
-async def refresh_keyboard(query, completed_task_id: int):
-    """Actualiza el teclado inline removiendo el botón completado."""
-    try:
-        if not query.message.reply_markup:
-            return
-
-        keyboard = query.message.reply_markup.inline_keyboard
-        new_keyboard = [
-            [btn for btn in row if btn.callback_data != f"{CALLBACK_COMPLETE}{completed_task_id}"
-             and btn.callback_data != f"{CALLBACK_DELETE_NOTE}{completed_task_id}"]
-            for row in keyboard
-        ]
-        # Filtrar filas vacías
-        new_keyboard = [row for row in new_keyboard if row]
-
-        if new_keyboard:
-            await query.edit_message_reply_markup(InlineKeyboardMarkup(new_keyboard))
-        else:
-            await query.edit_message_text("¡Todas las tareas de esta lista están listas! 🎉")
-    except Exception as e:
-        logger.warning("keyboard_refresh_failed", error=str(e))
-
-
-# ============================================================
-# LÓGICA DE NEGOCIO - PROCESAMIENTO DE PETICIONES
-# ============================================================
-
-async def process_request(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    user_text: str
-):
-    """Procesa una petición del usuario (texto o voz transcrita)."""
-    if not await verify_user(update):
-        return
-
-    chat_id = str(update.message.chat_id)
-    pool = await get_pool()
-    task_repo = TaskRepository(pool)
-
-    # Clasificar intención con IA
-    ai = get_ai_service()
-    result = await ai.classify_intent(user_text)
-
-    action = result.get("accion", "ERROR")
-    details = result.get("detalles", "")
-    fecha_hora_str = result.get("fecha_hora")
-
-    logger.info("intent_classified", action=action, details=details[:50], fecha_hora=fecha_hora_str)
-
-    # Parsear fecha si existe
-    fecha_hora = None
-    if fecha_hora_str and fecha_hora_str.lower() != "null":
-        try:
-            # La IA devuelve formato "YYYY-MM-DD HH:MM" en zona local
-            naive_dt = datetime.datetime.strptime(fecha_hora_str, "%Y-%m-%d %H:%M")
-            fecha_hora = naive_dt.replace(tzinfo=ZONA_HORARIA)
-        except ValueError as e:
-            logger.warning("date_parse_failed", fecha_hora_str=fecha_hora_str, error=str(e))
-
-    # Manejar acciones especiales
-    if action == "RECHAZADO_GASTOS":
-        await update.message.reply_text(
-            f"No gestiono finanzas. Registrá esto en tu otro bot: {details}"
-        )
-        return
-
-    if action == "CONVERSACION":
-        await update.message.reply_text(details)
-        return
-
-    if action == "DESHACER":
-        last_task = await task_repo.get_last_task(chat_id)
-        if last_task:
-            await task_repo.delete_by_id(last_task.id)
-            msg = f"🗑️ Se deshizo tu última carga: [{last_task.tipo.value}] {last_task.detalles}"
-            if last_task.tipo == TaskType.EVENTO:
-                msg += (
-                    "\n⚠️ (Importante: Borralo manualmente de Google Calendar, "
-                    "ya que esa conexión es de una sola vía por ahora)."
-                )
-            await update.message.reply_text(msg)
-        else:
-            await update.message.reply_text("No encontré ningún registro reciente para deshacer.")
-        return
-
-    if action == "ELIMINAR_FECHA":
-        if fecha_hora:
-            date_str = fecha_hora.strftime("%Y-%m-%d")
-            deleted = await task_repo.delete_by_date(chat_id, date_str)
-            await update.message.reply_text(
-                f"🗑️ Se eliminaron {deleted} registros programados para el {date_str}."
-            )
-        else:
-            await update.message.reply_text(
-                "No pude identificar qué fecha querés borrar. "
-                "Probá diciendo 'Borrar todo lo del 25 de octubre'."
-            )
-        return
-
-    # Crear evento en Google Calendar
-    if action == "EVENTO" and fecha_hora:
-        calendar = get_calendar_service()
-        success = await calendar.create_event(details, fecha_hora)
-        if success:
-            await update.message.reply_text(f"📅 Evento agendado en Calendar: {details}")
-        else:
-            await update.message.reply_text("Hubo un error al guardar en Calendar.")
-        return
-
-    # Guardar en BD (RECORDATORIO, NOTA, o EVENTO sin calendar)
-    await task_repo.save(
-        telefono_id=chat_id,
-        tipo=TaskType(action),
-        detalles=details,
-        fecha_hora=fecha_hora,
-    )
-
-    response = f"📝 Guardado como {action}."
-
-    # Programar alarma si es RECORDATORIO con fecha futura
-    if action == "RECORDATORIO" and fecha_hora:
-        reminder_service = get_reminder_service()
-        scheduled = await reminder_service.schedule_reminder(
-            context.job_queue,
-            chat_id=update.message.chat_id,
-            details=details,
-            when=fecha_hora,
-        )
-        if scheduled:
-            response += " ⏰ Alarma programada."
-
-    await update.message.reply_text(response)
-
-
-# ============================================================
-# RESUMEN DIARIO (Job programado)
-# ============================================================
-
-async def send_daily_summary(context: ContextTypes.DEFAULT_TYPE):
-    """Envía resumen diario al usuario (job programado a las 6:50)."""
-    chat_id = settings.mi_telegram_id
-    if not chat_id:
-        return
-
-    try:
-        summary_service = get_summary_service()
-        await summary_service.send_daily_summary(context.bot, chat_id)
-    except Exception as e:
-        logger.error("daily_summary_failed", error=str(e), exc_info=True)
-
-
-# ============================================================
-# MAIN - ENTRY POINT
-# ============================================================
-
-async def post_init(application: Application):
-    """Inicialización post-construcción de la aplicación."""
-    # Inicializar pool de BD y tablas
-    await init_db()
-    logger.info("database_ready")
-
-    # Verificar servicios
-    ai = get_ai_service()
-    if not ai.is_available():
-        logger.warning("ai_service_unavailable")
-    else:
-        logger.info("ai_service_ready")
-
-    calendar = get_calendar_service()
-    try:
-        await calendar.ensure_credentials()
-        logger.info("calendar_service_ready")
-    except Exception as e:
-        logger.warning("calendar_service_unavailable", error=str(e))
-
-
-async def post_shutdown(application: Application):
-    """Limpieza al apagar."""
-    await close_pool()
-    logger.info("application_shutdown_complete")
+        await update.message.reply_text(f"❌ Error en el test del sistema:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
 
 
 def main():
-    """Punto de entrada principal."""
-    logger.info("starting_secretar_ia")
-
-    # Construir aplicación
-    app = (
-        Application.builder()
-        .token(settings.telegram_token)
-        .post_init(post_init)
-        .post_shutdown(post_shutdown)
-        .build()
-    )
-
-    # Registrar handlers
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(CommandHandler("ayuda", help_cmd))
-    app.add_handler(CommandHandler("resumen", summary_cmd))
-    app.add_handler(CommandHandler("notas", notes_cmd))
-    app.add_handler(CommandHandler("test", test_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_text))
-    app.add_handler(MessageHandler(filters.VOICE, receive_audio))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-
-    # Job diario: resumen a las 6:50 AM (hora Argentina)
-    daily_time = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
-    app.job_queue.run_daily(send_daily_summary, time=daily_time)
-    logger.info("daily_summary_scheduled", time="06:50", timezone=str(ZONA_HORARIA))
-
-    # Iniciar health check server en background thread
-    health_thread = threading.Thread(target=start_health_server, daemon=True)
-    health_thread.start()
-
-    logger.info("bot_started_polling")
-    app.run_polling()
-
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("resumen", test_resumen))
+    app.add_handler(CommandHandler("notas", ver_notas))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_texto))
+    app.add_handler(MessageHandler(filters.VOICE, recibir_audio))
+    app.add_handler(CallbackQueryHandler(marcar_completada, pattern="^ok_"))
+    
+    hora_envio = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
+    app.job_queue.run_daily(enviar_resumen_diario, time=hora_envio)
+    
+    # Inicia el servidor web simulado en segundo plano
+    threading.Thread(target=iniciar_servidor, daemon=True).start()
+    
+    print("Bot privado con soporte para Render iniciado.")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()

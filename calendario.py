@@ -42,13 +42,6 @@ def obtener_eventos_calendario() -> list:
         print(f"Error leyendo Calendar: {e}")
         return []
     
-    'reminders': {
-    'useDefault': False,
-    'overrides': [
-        {'method': 'popup', 'minutes': 24 * 60}, # 1 día antes
-        {'method': 'popup', 'minutes': 60},      # 1 hora antes
-    ],
-}
 
 def crear_evento_calendario(resumen: str, fecha_hora: str) -> bool:
     try:
@@ -61,6 +54,13 @@ def crear_evento_calendario(resumen: str, fecha_hora: str) -> bool:
             'summary': resumen,
             'start': {'dateTime': inicio.isoformat(), 'timeZone': 'America/Argentina/Buenos_Aires'},
             'end': {'dateTime': fin.isoformat(), 'timeZone': 'America/Argentina/Buenos_Aires'},
+            'reminders': {
+                'useDefault': False,
+                'overrides': [
+                    {'method': 'popup', 'minutes': 24 * 60},  # 1 día antes
+                    {'method': 'popup', 'minutes': 60},       # 1 hora antes
+                ],
+            },
         }
         service.events().insert(calendarId='primary', body=evento).execute()
         return True
