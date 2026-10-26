@@ -37,6 +37,7 @@ class ActionType(str, Enum):
     REAGENDAR = "REAGENDAR"
     LISTAR = "LISTAR"
     BUSCAR = "BUSCAR"
+    ERROR = "ERROR"
 
 
 class RecurrenceFrequency(str, Enum):
