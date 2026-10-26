@@ -2,10 +2,15 @@
 Servicio de Google Calendar - Wrapper asíncrono de la API.
 
 Maneja OAuth, creación/lectura de eventos y persistencia de tokens en BD.
+Versión mejorada con:
+- Detección de conflictos
+- Sync bidireccional (actualizar/eliminar eventos)
+- Soporte para recurrencia (RRULE)
+- Manejo robusto de errores
 """
 import json
 import datetime
-from typing import Optional
+from typing import Optional, List
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -86,31 +91,50 @@ class CalendarService:
             self._service = build('calendar', 'v3', credentials=self._creds)
         return self._service
 
-    async def create_event(self, summary: str, start_dt: datetime.datetime) -> bool:
+    def _normalize_datetime(self, dt: datetime.datetime) -> datetime.datetime:
+        """Asegura que el datetime sea timezone-aware en zona de Argentina."""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=settings.tz)
+        elif dt.tzinfo != settings.tz:
+            dt = dt.astimezone(settings.tz)
+        return dt
+
+    async def create_event(
+        self,
+        summary: str,
+        start_dt: datetime.datetime,
+        end_dt: Optional[datetime.datetime] = None,
+        description: str = "",
+        recurrence: Optional[str] = None,
+        reminders: Optional[List[dict]] = None,
+    ) -> Optional[dict]:
         """
         Crea un evento en el calendario principal.
 
         Args:
             summary: Título del evento
-            start_dt: Fecha/hora de inicio (debe ser timezone-aware)
+            start_dt: Fecha/hora de inicio (timezone-aware)
+            end_dt: Fecha/hora de fin (default: +1 hora)
+            description: Descripción del evento
+            recurrence: RRULE string (ej: "FREQ=WEEKLY;BYDAY=MO")
+            reminders: Lista de overrides de recordatorios
 
         Returns:
-            True si se creó exitosamente
+            Evento creado (dict de la API) o None si falla
         """
         try:
             await self.ensure_credentials()
             service = self._get_service()
 
-            # Asegurar timezone aware en zona de Argentina
-            if start_dt.tzinfo is None:
-                start_dt = start_dt.replace(tzinfo=settings.tz)
-            elif start_dt.tzinfo != settings.tz:
-                start_dt = start_dt.astimezone(settings.tz)
-
-            end_dt = start_dt + datetime.timedelta(hours=1)
+            start_dt = self._normalize_datetime(start_dt)
+            if end_dt is None:
+                end_dt = start_dt + datetime.timedelta(hours=1)
+            else:
+                end_dt = self._normalize_datetime(end_dt)
 
             event = {
                 'summary': summary,
+                'description': description,
                 'start': {
                     'dateTime': start_dt.isoformat(),
                     'timeZone': str(settings.tz),
@@ -119,30 +143,47 @@ class CalendarService:
                     'dateTime': end_dt.isoformat(),
                     'timeZone': str(settings.tz),
                 },
-                # Recordatorios: 1 día antes y 1 hora antes
-                'reminders': {
+            }
+
+            # Recurrencia
+            if recurrence:
+                event['recurrence'] = [f"RRULE:{recurrence}"]
+
+            # Recordatorios personalizados
+            if reminders is not None:
+                event['reminders'] = {
+                    'useDefault': False,
+                    'overrides': reminders,
+                }
+            else:
+                # Default: 1 día antes y 1 hora antes
+                event['reminders'] = {
                     'useDefault': False,
                     'overrides': [
                         {'method': 'popup', 'minutes': 24 * 60},
                         {'method': 'popup', 'minutes': 60},
                     ],
-                },
-            }
+                }
 
-            service.events().insert(calendarId='primary', body=event).execute()
-            logger.info("calendar_event_created", summary=summary, start=start_dt.isoformat())
-            return True
+            created_event = service.events().insert(calendarId='primary', body=event).execute()
+            logger.info("calendar_event_created",
+                       summary=summary, start=start_dt.isoformat(), event_id=created_event.get('id'))
+            return created_event
 
         except HttpError as e:
             logger.error("calendar_api_error", error=str(e), status=e.resp.status)
-            return False
+            return None
         except Exception as e:
             logger.error("calendar_event_creation_failed", error=str(e), exc_info=True)
-            return False
+            return None
 
-    async def get_upcoming_events(self, max_results: int = 5) -> list[dict]:
+    async def get_upcoming_events(self, max_results: int = 10, time_min: Optional[datetime.datetime] = None) -> List[dict]:
         """
         Obtiene próximos eventos del calendario principal.
+
+        Args:
+            max_results: Máximo número de eventos
+            time_min: Fecha mínima (default: ahora)
 
         Returns:
             Lista de eventos (dicts de la API de Google)
@@ -151,10 +192,13 @@ class CalendarService:
             await self.ensure_credentials()
             service = self._get_service()
 
-            now = datetime.datetime.now(settings.tz).isoformat()
+            if time_min is None:
+                time_min = datetime.datetime.now(settings.tz)
+            time_min = self._normalize_datetime(time_min)
+
             events_result = service.events().list(
                 calendarId='primary',
-                timeMin=now,
+                timeMin=time_min.isoformat(),
                 maxResults=max_results,
                 singleEvents=True,
                 orderBy='startTime'
@@ -171,8 +215,130 @@ class CalendarService:
             logger.error("calendar_fetch_failed", error=str(e), exc_info=True)
             return []
 
+    async def check_conflicts(
+        self,
+        start_dt: datetime.datetime,
+        end_dt: datetime.datetime,
+        exclude_event_id: Optional[str] = None
+    ) -> List[dict]:
+        """
+        Verifica si hay conflictos de horario en el calendario.
+
+        Args:
+            start_dt: Inicio del nuevo evento
+            end_dt: Fin del nuevo evento
+            exclude_event_id: ID de evento a excluir (para updates)
+
+        Returns:
+            Lista de eventos que conflictan
+        """
+        try:
+            await self.ensure_credentials()
+            service = self._get_service()
+
+            start_dt = self._normalize_datetime(start_dt)
+            end_dt = self._normalize_datetime(end_dt)
+
+            # Buscar eventos en el rango
+            events_result = service.events().list(
+                calendarId='primary',
+                timeMin=start_dt.isoformat(),
+                timeMax=end_dt.isoformat(),
+                singleEvents=True,
+                orderBy='startTime'
+            ).execute()
+
+            events = events_result.get('items', [])
+
+            # Filtrar el evento excluido
+            if exclude_event_id:
+                events = [e for e in events if e.get('id') != exclude_event_id]
+
+            logger.debug("calendar_conflict_check", conflicts=len(events),
+                        start=start_dt.isoformat(), end=end_dt.isoformat())
+            return events
+
+        except HttpError as e:
+            logger.error("calendar_conflict_check_failed", error=str(e))
+            return []
+        except Exception as e:
+            logger.error("calendar_conflict_check_failed", error=str(e), exc_info=True)
+            return []
+
+    async def update_event(
+        self,
+        event_id: str,
+        summary: Optional[str] = None,
+        start_dt: Optional[datetime.datetime] = None,
+        end_dt: Optional[datetime.datetime] = None,
+        description: Optional[str] = None,
+        recurrence: Optional[str] = None,
+    ) -> Optional[dict]:
+        """
+        Actualiza un evento existente.
+
+        Args:
+            event_id: ID del evento a actualizar
+            summary: Nuevo título (opcional)
+            start_dt: Nueva fecha/hora inicio (opcional)
+            end_dt: Nueva fecha/hora fin (opcional)
+            description: Nueva descripción (opcional)
+            recurrence: Nueva recurrencia (opcional)
+
+        Returns:
+            Evento actualizado o None si falla
+        """
+        try:
+            await self.ensure_credentials()
+            service = self._get_service()
+
+            # Obtener evento actual
+            event = service.events().get(calendarId='primary', eventId=event_id).execute()
+
+            # Actualizar campos
+            if summary is not None:
+                event['summary'] = summary
+            if description is not None:
+                event['description'] = description
+            if start_dt is not None:
+                start_dt = self._normalize_datetime(start_dt)
+                event['start'] = {'dateTime': start_dt.isoformat(), 'timeZone': str(settings.tz)}
+            if end_dt is not None:
+                end_dt = self._normalize_datetime(end_dt)
+                event['end'] = {'dateTime': end_dt.isoformat(), 'timeZone': str(settings.tz)}
+            if recurrence is not None:
+                if recurrence:
+                    event['recurrence'] = [f"RRULE:{recurrence}"]
+                elif 'recurrence' in event:
+                    del event['recurrence']
+
+            updated_event = service.events().update(
+                calendarId='primary', eventId=event_id, body=event
+            ).execute()
+
+            logger.info("calendar_event_updated", event_id=event_id)
+            return updated_event
+
+        except HttpError as e:
+            if e.resp.status == 404:
+                logger.warning("calendar_event_not_found", event_id=event_id)
+            else:
+                logger.error("calendar_update_error", error=str(e), status=e.resp.status)
+            return None
+        except Exception as e:
+            logger.error("calendar_update_failed", error=str(e), exc_info=True)
+            return None
+
     async def delete_event(self, event_id: str) -> bool:
-        """Elimina un evento por ID."""
+        """
+        Elimina un evento por ID.
+
+        Args:
+            event_id: ID del evento a eliminar
+
+        Returns:
+            True si se eliminó exitosamente
+        """
         try:
             await self.ensure_credentials()
             service = self._get_service()
@@ -188,3 +354,93 @@ class CalendarService:
         except Exception as e:
             logger.error("calendar_delete_failed", error=str(e), exc_info=True)
             return False
+
+    async def find_event_by_summary_and_date(
+        self,
+        summary: str,
+        date: datetime.datetime
+    ) -> Optional[dict]:
+        """
+        Busca un evento por título y fecha aproximada (útil para REAGENDAR).
+
+        Args:
+            summary: Título o parte del título
+            date: Fecha aproximada
+
+        Returns:
+            Evento encontrado o None
+        """
+        try:
+            await self.ensure_credentials()
+            service = self._get_service()
+
+            # Buscar en rango de 3 días alrededor de la fecha
+            start = self._normalize_datetime(date - datetime.timedelta(days=2))
+            end = self._normalize_datetime(date + datetime.timedelta(days=2))
+
+            events_result = service.events().list(
+                calendarId='primary',
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy='startTime',
+                q=summary  # Query de texto libre
+            ).execute()
+
+            events = events_result.get('items', [])
+            for event in events:
+                if summary.lower() in event.get('summary', '').lower():
+                    return event
+
+            return None
+
+        except Exception as e:
+            logger.error("calendar_find_event_failed", error=str(e))
+            return None
+
+    async def sync_event_from_local(
+        self,
+        local_task_id: int,
+        summary: str,
+        start_dt: datetime.datetime,
+        end_dt: Optional[datetime.datetime] = None,
+        description: str = "",
+        recurrence: Optional[str] = None,
+        existing_event_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Sincroniza una tarea local con Calendar (create o update).
+
+        Args:
+            local_task_id: ID de la tarea local
+            summary: Título
+            start_dt: Inicio
+            end_dt: Fin
+            description: Descripción
+            recurrence: RRULE
+            existing_event_id: ID de evento ya sincronizado (para update)
+
+        Returns:
+            Event ID de Google Calendar o None si falla
+        """
+        if existing_event_id:
+            # Actualizar evento existente
+            updated = await self.update_event(
+                event_id=existing_event_id,
+                summary=summary,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                description=description,
+                recurrence=recurrence,
+            )
+            return existing_event_id if updated else None
+        else:
+            # Crear nuevo
+            created = await self.create_event(
+                summary=summary,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                description=description,
+                recurrence=recurrence,
+            )
+            return created.get('id') if created else None

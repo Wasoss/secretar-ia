@@ -1,274 +1,754 @@
+"""
+Secretar-IA - Asistente personal inteligente para Telegram.
+Versión moderna con arquitectura async, servicios desacoplados y IA enriquecida.
+"""
 import os
+import asyncio
 import datetime
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.constants import ParseMode
 
+from config.settings import settings
+from config.logging import configure_logging, get_logger
+from application.services.ai_service import AIService, ActionType, ParsedIntent
+from application.services.calendar_service import CalendarService
+from application.services.reminder_service import ReminderService
+from application.services.summary_service import SummaryService
+from infrastructure.database.connection import init_db, close_pool
+from infrastructure.database.repositories.task_repo import TaskRepository, TaskType, TaskStatus
+
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-MI_TELEGRAM_ID = os.getenv("MI_TELEGRAM_ID")
-ZONA_HORARIA = ZoneInfo("America/Argentina/Buenos_Aires")
 
-import base_datos
-import calendario
-import motor_ia
+# Configurar logging estructurado
+configure_logging()
+logger = get_logger(__name__)
 
-base_datos.inicializar_db()
+# Servicios globales (inicializados en startup)
+ai_service: AIService = None
+calendar_service: CalendarService = None
+reminder_service: ReminderService = None
+summary_service: SummaryService = None
+task_repo: TaskRepository = None
 
-# --- SERVIDOR SIMULADO PARA RENDER ---
-class DummyHandler(BaseHTTPRequestHandler):
+ZONA_HORARIA = settings.tz
+
+
+# --- SERVIDOR WEB PARA RENDER (HEALTH CHECK) ---
+class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot activo")
+        if self.path in ["/", "/health", "/healthz"]:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status": "ok", "service": "secretar-ia"}')
+        else:
+            self.send_response(404)
+            self.end_headers()
 
-def iniciar_servidor():
+    def log_message(self, format, *args):
+        # Silenciar logs del health check
+        pass
+
+
+def iniciar_servidor_web():
+    """Inicia servidor HTTP para health checks de Render."""
     puerto = int(os.getenv("PORT", 10000))
-    HTTPServer(("0.0.0.0", puerto), DummyHandler).serve_forever()
+    server = HTTPServer(("0.0.0.0", puerto), HealthCheckHandler)
+    logger.info("health_check_server_started", port=puerto)
+    server.serve_forever()
 
-# --- FORMATEO Y SEGURIDAD ---
+
+# --- FORMATEO Y UTILIDADES ---
 def formatear_fecha_arg(fecha_str: str) -> str:
-    if not fecha_str or fecha_str.lower() == "null": 
+    """Formatea fecha ISO a formato argentino (DD/MM/YYYY HH:MM)."""
+    if not fecha_str or fecha_str.lower() == "null":
         return ""
     try:
-        fecha_limpia = fecha_str.replace("T", " ")[:16]
-        if " " in fecha_limpia:
-            return datetime.datetime.strptime(fecha_limpia, "%Y-%m-%d %H:%M").strftime("%d/%m/%Y %H:%M")
-        return datetime.datetime.strptime(fecha_limpia[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        clean = fecha_str.replace("T", " ")[:19]
+        dt = datetime.datetime.fromisoformat(clean)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZONA_HORARIA)
+        return dt.strftime("%d/%m/%Y %H:%M")
     except Exception:
         return fecha_str
 
+
 async def verificar_usuario(update: Update) -> bool:
+    """Verifica que el usuario sea el autorizado."""
     chat_id = str(update.effective_chat.id)
-    if chat_id != MI_TELEGRAM_ID:
-        print(f"Acceso bloqueado al ID: {chat_id}")
+    if chat_id != settings.mi_telegram_id:
+        logger.warning("acceso_bloqueado", chat_id=chat_id)
         await update.message.reply_text("⛔ Acceso denegado. No estás autorizado para usar este bot.")
         return False
     return True
 
-# --- FUNCIONES PRINCIPALES ---
+
+# --- HANDLERS DE COMANDOS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await verificar_usuario(update): return
+    """Comando /start - Bienvenida y registro de chat_id."""
+    if not await verificar_usuario(update):
+        return
+
+    # Guardar chat_id para jobs
     context.job_queue.run_once(guardar_chat_id, 1, data=str(update.message.chat_id))
-    await update.message.reply_text("Hola. Soy tu Secretar-IA. Ya puedo gestionar tu agenda, alarmas y notas de forma segura en la nube.")
+
+    await update.message.reply_text(
+        "Hola. Soy tu Secretar-IA. ✨\n\n"
+        "Ahora entiendo peticiones complejas:\n"
+        "• <i>\"Reunión con Juan el próximo martes a las 14hs, urgente #trabajo\"</i>\n"
+        "• <i>\"Recordame tomar agua cada hora en días hábiles\"</i>\n"
+        "• <i>\"Cambia la reunión de Juan al miércoles a las 15hs\"</i>\n"
+        "• <i>\"Qué tengo el viernes\"</i> / <i>\"Buscar nota wifi\"</i>\n\n"
+        "Comandos: /resumen /notas /ayuda /test",
+        parse_mode=ParseMode.HTML
+    )
+
 
 async def guardar_chat_id(context: ContextTypes.DEFAULT_TYPE):
+    """Guarda el chat_id en bot_data para jobs programados."""
     context.bot_data['chat_id'] = context.job.data
 
-async def enviar_alarma(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = context.job.chat_id
-    detalles = context.job.data
-    await context.bot.send_message(chat_id=chat_id, text=f"⏰ <b>¡RECORDATORIO!</b>\n\nEs hora de: {detalles}", parse_mode=ParseMode.HTML)
 
-async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_usuario: str):
-    if not await verificar_usuario(update): return
-    
-    chat_id = str(update.message.chat_id)
-    resultado = motor_ia.clasificar_intencion(texto_usuario)
-    
-    accion = resultado.get("accion", "ERROR")
-    detalles = resultado.get("detalles", "")
-    fecha_hora = resultado.get("fecha_hora")
-    
-    if accion == "RECHAZADO_GASTOS":
-        await update.message.reply_text(f"No gestiono finanzas. Registrá esto en tu otro bot: {detalles}")
-        return
-        
-    if accion == "CONVERSACION":
-        await update.message.reply_text(detalles)
+async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /ayuda - Guía de funciones."""
+    if not await verificar_usuario(update):
         return
 
-    if accion == "DESHACER":
-        ultima = base_datos.obtener_ultima_tarea(chat_id)
-        if ultima:
-            t_id, t_tipo, t_detalles = ultima
-            base_datos.eliminar_tarea_por_id(t_id)
-            mensaje_borrado = f"🗑️ Se deshizo tu última carga: [{t_tipo}] {t_detalles}"
-            if t_tipo == "EVENTO":
-                mensaje_borrado += "\n⚠️ (Importante: Borralo manualmente de Google Calendar, ya que esa conexión es de una sola vía por ahora)."
-            await update.message.reply_text(mensaje_borrado)
-        else:
-            await update.message.reply_text("No encontré ningún registro reciente para deshacer.")
+    texto = (
+        "🤖 <b>Guía de Secretar-IA</b>\n\n"
+        "📅 <b>Eventos (Google Calendar):</b>\n"
+        "  <i>\"Reunión el martes a las 15hs\"</i>\n"
+        "  <i>\"Cita dentista el 20/01 a las 10:30\"</i>\n"
+        "  <i>\"Clase yoga cada lunes a las 19hs\"</i> (recurrente)\n\n"
+        "⏰ <b>Recordatorios (alarmas locales):</b>\n"
+        "  <i>\"Recordame llamar a mamá a las 18hs\"</i>\n"
+        "  <i>\"Avisame tomar pastillas cada 8hs\"</i> (recurrente)\n\n"
+        "📔 <b>Notas (sin fecha):</b>\n"
+        "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
+        "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
+        "🔧 <b>Gestión avanzada:</b>\n"
+        "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
+        "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
+        "  <i>\"Deshacer\"</i> (borra último)\n\n"
+        "📋 <b>Comandos:</b>\n"
+        "  /resumen — Ver tareas y eventos próximos\n"
+        "  /notas — Consultar notas guardadas\n"
+        "  /hoy — Ver agenda de hoy\n"
+        "  /semana — Ver agenda de la semana\n"
+        "  /buscar <texto> — Buscar en notas/eventos\n"
+        "  /tag <etiqueta> — Filtrar por tag\n"
+        "  /ayuda — Esta guía\n"
+        "  /test — Diagnóstico del sistema\n\n"
+        "💡 <b>Tips:</b> Usá #tag para organizar. "
+        "Palabras clave: <i>urgente</i> (prioridad alta), "
+        "<i>no apura</i> (baja)."
+    )
+    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+
+
+async def test_sistema(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /test - Diagnóstico del sistema."""
+    if not await verificar_usuario(update):
         return
 
-    if accion == "ELIMINAR_FECHA":
-        if fecha_hora:
-            fecha_corta = fecha_hora[:10]  # Extrae solo YYYY-MM-DD
-            borrados = base_datos.eliminar_por_fecha(chat_id, fecha_corta)
-            await update.message.reply_text(f"🗑️ Se eliminaron {borrados} registros programados para el {fecha_corta}.")
-        else:
-            await update.message.reply_text("No pude identificar qué fecha querés borrar. Probá diciendo 'Borrar todo lo del 25 de octubre'.")
-        return
-        
-    if accion == "EVENTO" and fecha_hora:
-        if calendario.crear_evento_calendario(detalles, fecha_hora):
-            await update.message.reply_text(f"📅 Evento agendado en Calendar: {detalles}")
-        else:
-            await update.message.reply_text("Hubo un error al guardar en Calendar.")
-        return
+    chat_id = str(update.effective_chat.id)
+    try:
+        # Test DB
+        pending = await task_repo.get_pending(chat_id)
+        # Test Calendar
+        events = await calendar_service.get_upcoming_events(max_results=3)
+        # Test IA
+        ai_ok = ai_service.is_available()
 
-    base_datos.guardar_tarea(chat_id, accion, detalles, fecha_hora)
-    respuesta = f"📝 Guardado como {accion}."
+        resultado = (
+            "🧪 <b>Diagnóstico del Sistema:</b>\n\n"
+            f"✅ Base de datos (Neon): Conectada\n"
+            f"   └ Tareas pendientes: {len(pending)}\n"
+            f"✅ Google Calendar: Conectado\n"
+            f"   └ Próximos eventos: {len(events)}\n"
+            f"{'✅' if ai_ok else '❌'} Motor IA (Groq): {'Activo' if ai_ok else 'No disponible'}\n"
+            f"   └ Modelo: {settings.groq_model}"
+        )
+        await update.message.reply_text(resultado, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error("test_sistema_failed", error=str(e), exc_info=True)
+        await update.message.reply_text(f"❌ Error en test:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
 
-    if accion == "RECORDATORIO" and fecha_hora:
-        try:
-            fecha_obj = datetime.datetime.strptime(fecha_hora, "%Y-%m-%d %H:%M").replace(tzinfo=ZONA_HORARIA)
-            ahora = datetime.datetime.now(ZONA_HORARIA)
-            if fecha_obj > ahora:
-                segundos_espera = (fecha_obj - ahora).total_seconds()
-                context.job_queue.run_once(enviar_alarma, when=segundos_espera, chat_id=update.message.chat_id, data=detalles)
-                respuesta += " ⏰ Alarma programada."
-        except Exception as e:
-            print(f"Error programando alarma: {e}")
-
-    await update.message.reply_text(respuesta)
-
-async def recibir_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await procesar_peticion(update, context, update.message.text)
-
-async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await verificar_usuario(update): return
-    archivo = await update.message.voice.get_file()
-    ruta_audio = "nota_de_voz.ogg"
-    await archivo.download_to_drive(ruta_audio)
-    
-    transcripcion = motor_ia.transcribir_audio(ruta_audio)
-    await procesar_peticion(update, context, transcripcion)
-    os.remove(ruta_audio)
-
-async def marcar_completada(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if str(query.message.chat_id) != MI_TELEGRAM_ID: return
-    
-    tarea_id = query.data.split("_")[1]
-    base_datos.completar_tarea(tarea_id)
-    
-    await query.answer("¡Acción completada! ✅")
-    teclado_actual = query.message.reply_markup.inline_keyboard
-    nuevo_teclado = [[btn] for fila in teclado_actual for btn in fila if btn.callback_data != query.data]
-    
-    if nuevo_teclado:
-        await query.edit_message_reply_markup(InlineKeyboardMarkup(nuevo_teclado))
-    else:
-        await query.edit_message_text(text="¡Todas las tareas de esta lista están listas! 🎉")
-
-async def enviar_resumen_diario(context: ContextTypes.DEFAULT_TYPE):
-    chat_id = MI_TELEGRAM_ID
-    if not chat_id: return
-        
-    pendientes = base_datos.obtener_pendientes(chat_id)
-    eventos = calendario.obtener_eventos_calendario()
-    
-    if not pendientes and not eventos:
-        await context.bot.send_message(chat_id=chat_id, text="¡Buen día! ☀️ No tenés tareas ni eventos próximos.")
-        return
-
-    mensaje = "¡Buen día! ☀️ Acá tenés tu resumen:\n\n"
-    if eventos:
-        mensaje += "📅 <b>Próximos eventos (Calendar):</b>\n"
-        for evento in eventos:
-            inicio = evento['start'].get('dateTime', evento['start'].get('date'))
-            fecha_str = formatear_fecha_arg(inicio)
-            mensaje += f"▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>)\n"
-        mensaje += "\n"
-        
-    if pendientes:
-        mensaje += "📝 <b>Tareas y Notas pendientes:</b>\n"
-        botones = []
-        for tarea in pendientes:
-            t_id, tipo, detalles, fecha = tarea
-            fecha_str = f" (<i>{formatear_fecha_arg(fecha)}</i>)" if fecha else ""
-            mensaje += f"○ <b>[{tipo}]</b> {detalles}{fecha_str}\n"
-            botones.append([InlineKeyboardButton(f"✅ {detalles[:25]}", callback_data=f"ok_{t_id}")])
-            
-        teclado = InlineKeyboardMarkup(botones)
-        await context.bot.send_message(chat_id=chat_id, text=mensaje, reply_markup=teclado, parse_mode=ParseMode.HTML)
-    else:
-        await context.bot.send_message(chat_id=chat_id, text=mensaje, parse_mode=ParseMode.HTML)
-
-async def test_resumen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await verificar_usuario(update): return
-    await enviar_resumen_diario(context)
 
 async def ver_notas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await verificar_usuario(update): return
+    """Comando /notas - Ver solo notas."""
+    if not await verificar_usuario(update):
+        return
+
     chat_id = str(update.message.chat_id)
-    notas = base_datos.obtener_solo_notas(chat_id)
-    
+    notas = await task_repo.get_notes(chat_id)
+
     if not notas:
         await update.message.reply_text("📔 No tenés notas guardadas actualmente.")
         return
 
-    mensaje = "📔 <b>Tus Notas guardadas:</b>\n\n"
+    mensaje = "📔 <b>Tus Notas:</b>\n\n"
     botones = []
     for nota in notas:
-        t_id, tipo, detalles, fecha = nota
-        mensaje += f"○ {detalles}\n"
-        botones.append([InlineKeyboardButton(f"❌ Borrar: {detalles[:20]}", callback_data=f"ok_{t_id}")])
-        
+        tag_str = f" #{' #'.join(nota.tags)}" if nota.tags else ""
+        mensaje += f"○ {nota.detalles}{tag_str}\n"
+        botones.append([InlineKeyboardButton(f"🗑️ {nota.detalles[:25]}", callback_data=f"delete_{nota.id}")])
+
     teclado = InlineKeyboardMarkup(botones)
     await update.message.reply_text(text=mensaje, reply_markup=teclado, parse_mode=ParseMode.HTML)
 
-async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await verificar_usuario(update): return
-    texto = (
-        "🤖 <b>Guía de Funciones de Secretar-IA</b>\n\n"
-        "• 📅 <b>Eventos:</b> Decí o escribí citas (ej. <i>'Reunión el martes a las 15hs'</i>) para guardarlas en Google Calendar.\n"
-        "• ⏰ <b>Recordatorios:</b> Programá alarmas (ej. <i>'Recordame llamar a mamá a las 18hs'</i>).\n"
-        "• 📔 <b>Notas:</b> Guardá información sin fecha (ej. <i>'Anotá la clave del wifi es 1234'</i>).\n"
-        "• 📋 <b>Comandos disponibles:</b>\n"
-        "  /resumen - Ver tareas y eventos próximos.\n"
-        "  /notas - Consultar tus notas guardadas.\n"
-        "  /ayuda - Muestra esta guía.\n"
-        "  /test - Verifica el estado de la base de datos y Calendar.\n"
-        "• 🗑️ <b>Gestión:</b> Decí <i>'deshacer'</i> para borrar la última carga, o <i>'borrar todo lo del 25 de octubre'</i> para limpiar una fecha."
-    )
-    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
 
-async def test_sistema(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await verificar_usuario(update): return
-    chat_id = str(update.effective_chat.id)
-    try:
-        # Prueba de conexión a la Base de Datos (Neon)
-        pendientes = base_datos.obtener_pendientes(chat_id)
-        # Prueba de conexión a Google Calendar
-        eventos = calendario.obtener_eventos_calendario()
-        
-        resultado = (
-            "🧪 <b>Diagnóstico del Sistema:</b>\n\n"
-            "✅ Base de datos (Neon.tech): Conectada\n"
-            f"   └ Tareas/Notas pendientes: {len(pendientes)}\n"
-            "✅ Google Calendar: Conectado\n"
-            f"   └ Próximos eventos sincronizados: {len(eventos)}\n"
-            "✅ Motor de IA (Groq): Activo"
+async def ver_hoy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /hoy - Ver agenda de hoy."""
+    if not await verificar_usuario(update):
+        return
+
+    chat_id = str(update.message.chat_id)
+    hoy = datetime.datetime.now(ZONA_HORARIA).replace(hour=0, minute=0, second=0, microsecond=0)
+    manana = hoy + datetime.timedelta(days=1)
+
+    tasks = await task_repo.get_tasks_by_date_range(chat_id, hoy, manana)
+    events = await calendar_service.get_upcoming_events(max_results=10, time_min=hoy)
+
+    # Filtrar eventos de hoy
+    events_hoy = [e for e in events if _event_starts_today(e, hoy)]
+
+    await summary_service.send_custom_summary(
+        context.bot, chat_id, tasks, events_hoy, "📅 Agenda de Hoy"
+    )
+
+
+async def ver_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /semana - Ver agenda de la semana."""
+    if not await verificar_usuario(update):
+        return
+
+    chat_id = str(update.message.chat_id)
+    hoy = datetime.datetime.now(ZONA_HORARIA).replace(hour=0, minute=0, second=0, microsecond=0)
+    en_una_semana = hoy + datetime.timedelta(days=7)
+
+    tasks = await task_repo.get_tasks_by_date_range(chat_id, hoy, en_una_semana)
+    events = await calendar_service.get_upcoming_events(max_results=20, time_min=hoy)
+
+    await summary_service.send_custom_summary(
+        context.bot, chat_id, tasks, events, "📅 Agenda de la Semana"
+    )
+
+
+async def buscar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /buscar - Buscar en tareas y notas."""
+    if not await verificar_usuario(update):
+        return
+
+    chat_id = str(update.message.chat_id)
+    query = " ".join(context.args) if context.args else ""
+
+    if not query:
+        await update.message.reply_text("Uso: /buscar <texto a buscar>")
+        return
+
+    tasks = await task_repo.search_tasks(chat_id, query)
+    # También buscar en calendar (limitado)
+    events = await calendar_service.get_upcoming_events(max_results=50)
+    events_filtrados = [e for e in events if query.lower() in e.get('summary', '').lower()]
+
+    await summary_service.send_custom_summary(
+        context.bot, chat_id, tasks, events_filtrados, f"🔍 Resultados: '{query}'"
+    )
+
+
+async def filtrar_tag(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /tag - Filtrar tareas por tag."""
+    if not await verificar_usuario(update):
+        return
+
+    chat_id = str(update.message.chat_id)
+    tag = " ".join(context.args) if context.args else ""
+
+    if not tag:
+        await update.message.reply_text("Uso: /tag <etiqueta>")
+        return
+
+    tasks = await task_repo.get_tasks_by_tag(chat_id, tag.lower())
+    await summary_service.send_custom_summary(
+        context.bot, chat_id, tasks, [], f"🏷️ Tag: #{tag}"
+    )
+
+
+# --- PROCESAMIENTO PRINCIPAL ---
+async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_usuario: str):
+    """Procesa el texto del usuario usando el servicio de IA enriquecido."""
+    if not await verificar_usuario(update):
+        return
+
+    chat_id = str(update.message.chat_id)
+
+    # Clasificar intención con IA
+    intent: ParsedIntent = await ai_service.classify_intent(texto_usuario)
+
+    # Log para debugging
+    logger.info("intent_received", action=intent.accion.value,
+               detalles=intent.detalles[:50], fecha=intent.fecha_hora,
+               recurrence=intent.recurrencia, tags=intent.tags)
+
+    # Manejar según acción
+    if intent.accion == ActionType.ERROR:
+        await update.message.reply_text(f"⚠️ No entendí: {intent.detalles}")
+        return
+
+    if intent.accion == ActionType.RECHAZADO_GASTOS:
+        await update.message.reply_text(f"No gestiono finanzas. Registrá esto en tu otro bot: {intent.detalles}")
+        return
+
+    if intent.accion == ActionType.CONVERSACION:
+        await update.message.reply_text(intent.detalles)
+        return
+
+    if intent.accion == ActionType.DESHACER:
+        await handle_deshacer(update, chat_id)
+        return
+
+    if intent.accion == ActionType.ELIMINAR_FECHA:
+        await handle_eliminar_fecha(update, chat_id, intent.fecha_hora)
+        return
+
+    if intent.accion == ActionType.REAGENDAR:
+        await handle_reagendar(update, context, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.LISTAR:
+        await handle_listar(update, context, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.BUSCAR:
+        await handle_buscar(update, context, chat_id, intent)
+        return
+
+    # Acciones que guardan en BD: EVENTO, RECORDATORIO, NOTA
+    await handle_guardar_tarea(update, context, chat_id, intent)
+
+
+async def handle_guardar_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                               chat_id: str, intent: ParsedIntent):
+    """Guarda EVENTO, RECORDATORIO o NOTA en BD y Calendar si aplica."""
+    calendar_event_id = None
+
+    # Si es EVENTO, crear en Google Calendar
+    if intent.accion == ActionType.EVENTO and intent.fecha_hora:
+        start_dt = intent.fecha_hora
+        end_dt = start_dt + datetime.timedelta(hours=1)
+
+        # Verificar conflictos
+        conflicts = await calendar_service.check_conflicts(start_dt, end_dt)
+        if conflicts:
+            conflict_names = [c.get('summary', 'Sin título') for c in conflicts[:3]]
+            await update.message.reply_text(
+                f"⚠️ <b>Conflicto detectado</b>: Tenés otros eventos en ese horario:\n"
+                f"{', '.join(conflict_names)}\n\n¿Querés que lo agende igual?",
+                parse_mode=ParseMode.HTML
+            )
+            # Podríamos guardar como pendiente de confirmación, por ahora no guardamos
+            return
+
+        created_event = await calendar_service.create_event(
+            summary=intent.detalles,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            recurrence=intent.recurrencia,
         )
-        await update.message.reply_text(resultado, parse_mode=ParseMode.HTML)
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error en el test del sistema:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
+        if created_event:
+            calendar_event_id = created_event.get('id')
+            logger.info("calendar_event_synced", local_action="EVENTO",
+                       calendar_event_id=calendar_event_id)
+        else:
+            await update.message.reply_text("⚠️ Se guardó localmente pero falló la sincronización con Calendar.")
+
+    # Guardar en BD
+    task_id = await task_repo.save(
+        telefono_id=chat_id,
+        tipo=TaskType(intent.accion.value),
+        detalles=intent.detalles,
+        fecha_hora=intent.fecha_hora,
+        recurrencia=intent.recurrencia,
+        prioridad=intent.prioridad,
+        tags=intent.tags,
+        calendar_event_id=calendar_event_id,
+    )
+
+    # Respuesta al usuario
+    respuesta = _build_confirmation_message(intent, task_id, calendar_event_id)
+
+    # Programar recordatorio si es RECORDATORIO
+    if intent.accion == ActionType.RECORDATORIO and intent.fecha_hora:
+        success = await reminder_service.schedule_reminder(
+            context.job_queue,
+            int(chat_id),
+            intent.detalles,
+            intent.fecha_hora,
+        )
+        if success:
+            respuesta += " ⏰ Alarma programada."
+        else:
+            respuesta += " ⚠️ No se pudo programar la alarma (¿fecha pasada?)."
+
+    await update.message.reply_text(respuesta, parse_mode=ParseMode.HTML)
+
+
+def _build_confirmation_message(intent: ParsedIntent, task_id: int, calendar_event_id: Optional[str]) -> str:
+    """Construye mensaje de confirmación bonito."""
+    icons = {
+        ActionType.EVENTO: "📅",
+        ActionType.RECORDATORIO: "⏰",
+        ActionType.NOTA: "📔",
+    }
+    icon = icons.get(intent.accion, "📝")
+
+    parts = [f"{icon} Guardado como <b>{intent.accion.value}</b> (ID: {task_id})"]
+    parts.append(f"📝 {intent.detalles}")
+
+    if intent.fecha_hora:
+        parts.append(f"📅 {formatear_fecha_arg(intent.fecha_hora.isoformat())}")
+
+    if intent.recurrencia:
+        parts.append(f"🔄 Recurrente: <code>{intent.recurrencia}</code>")
+
+    if intent.prioridad == 1:
+        parts.append("🔴 Prioridad: ALTA")
+    elif intent.prioridad == -1:
+        parts.append("🟢 Prioridad: BAJA")
+
+    if intent.tags:
+        parts.append(f"🏷️ Tags: #{' #'.join(intent.tags)}")
+
+    if calendar_event_id:
+        parts.append("☁️ Sincronizado con Google Calendar")
+
+    return "\n".join(parts)
+
+
+async def handle_deshacer(update: Update, chat_id: str):
+    """Maneja DESHACER - borra última tarea."""
+    ultima = await task_repo.get_last_task(chat_id)
+    if not ultima:
+        await update.message.reply_text("No encontré ningún registro reciente para deshacer.")
+        return
+
+    # Si tenía calendar_event_id, borrar de Calendar también
+    if ultima.calendar_event_id:
+        await calendar_service.delete_event(ultima.calendar_event_id)
+
+    await task_repo.delete_by_id(ultima.id)
+
+    mensaje = f"🗑️ Se deshizo tu última carga: [{ultima.tipo.value}] {ultima.detalles}"
+    if ultima.tipo == TaskType.EVENTO and ultima.calendar_event_id:
+        mensaje += "\n✅ También se eliminó de Google Calendar."
+    await update.message.reply_text(mensaje)
+
+
+async def handle_eliminar_fecha(update: Update, chat_id: str, fecha_hora: datetime.datetime):
+    """Maneja ELIMINAR_FECHA - borra todo de un día."""
+    if not fecha_hora:
+        await update.message.reply_text("No pude identificar qué fecha querés borrar. Probá: 'Borrar todo el 25 de octubre'.")
+        return
+
+    fecha_str = fecha_hora.strftime("%Y-%m-%d")
+
+    # Borrar de BD
+    borrados = await task_repo.delete_by_date(chat_id, fecha_str)
+
+    # TODO: Borrar de Calendar también (requiere buscar eventos de ese día)
+
+    await update.message.reply_text(f"🗑️ Se eliminaron {borrados} registros programados para el {fecha_str}.")
+
+
+async def handle_reagendar(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                          chat_id: str, intent: ParsedIntent):
+    """Maneja REAGENDAR - cambia fecha/hora de tarea existente."""
+    if not intent.fecha_hora:
+        await update.message.reply_text("No pude identificar la nueva fecha/hora. Probá: 'Cambia la reunión al miércoles a las 15hs'.")
+        return
+
+    # Buscar tarea a reagendar
+    task = None
+    if intent.tarea_original_id:
+        task = await task_repo.get_task_by_id(intent.tarea_original_id)
+    else:
+        # Buscar por similitud en últimas tareas
+        pendientes = await task_repo.get_pending(chat_id)
+        for t in pendientes:
+            if intent.detalles.lower() in t.detalles.lower() or t.detalles.lower() in intent.detalles.lower():
+                task = t
+                break
+
+    if not task:
+        await update.message.reply_text("No encontré la tarea a reagendar. Probá siendo más específico o usá /resumen para ver IDs.")
+        return
+
+    # Si es EVENTO, actualizar en Calendar
+    old_calendar_id = task.calendar_event_id
+    new_calendar_id = None
+
+    if task.tipo == TaskType.EVENTO:
+        start_dt = intent.fecha_hora
+        end_dt = start_dt + datetime.timedelta(hours=1)
+
+        # Verificar conflictos (excluyendo el propio evento)
+        conflicts = await calendar_service.check_conflicts(start_dt, end_dt, exclude_event_id=old_calendar_id)
+        if conflicts:
+            conflict_names = [c.get('summary', 'Sin título') for c in conflicts[:3]]
+            await update.message.reply_text(
+                f"⚠️ Conflicto en nuevo horario: {', '.join(conflict_names)}",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        if old_calendar_id:
+            updated = await calendar_service.update_event(
+                event_id=old_calendar_id,
+                summary=task.detalles,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                recurrence=intent.recurrencia,
+            )
+            if updated:
+                new_calendar_id = old_calendar_id
+        else:
+            # No tenía ID, crear nuevo
+            created = await calendar_service.create_event(
+                summary=task.detalles,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                recurrence=intent.recurrencia,
+            )
+            if created:
+                new_calendar_id = created.get('id')
+
+    # Actualizar en BD
+    await task_repo.update_task(
+        task_id=task.id,
+        fecha_hora=intent.fecha_hora,
+        recurrencia=intent.recurrencia,
+        calendar_event_id=new_calendar_id,
+    )
+
+    # Reprogramar recordatorio si era RECORDATORIO
+    if task.tipo == TaskType.RECORDATORIO:
+        await reminder_service.cancel_reminders(context.job_queue, int(chat_id))
+        if intent.fecha_hora:
+            await reminder_service.schedule_reminder(
+                context.job_queue, int(chat_id), task.detalles, intent.fecha_hora
+            )
+
+    await update.message.reply_text(
+        f"🔄 <b>Reagendado:</b> {task.detalles}\n"
+        f"📅 Nuevo: {formatear_fecha_arg(intent.fecha_hora.isoformat())}"
+        + (f"\n🔄 Recurrencia: {intent.recurrencia}" if intent.recurrencia else "")
+        + ("\n☁️ Sincronizado con Calendar" if new_calendar_id else ""),
+        parse_mode=ParseMode.HTML
+    )
+
+
+async def handle_listar(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       chat_id: str, intent: ParsedIntent):
+    """Maneja LISTAR - muestra agenda según fecha_hora (hoy, semana, etc)."""
+    if intent.fecha_hora:
+        # Usar fecha como referencia
+        ref_date = intent.fecha_hora.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        ref_date = datetime.datetime.now(ZONA_HORARIA).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Determinar rango según detalles
+    detalles_lower = intent.detalles.lower()
+    if "semana" in detalles_lower or "7 día" in detalles_lower:
+        end_date = ref_date + datetime.timedelta(days=7)
+        title = "📅 Agenda de la Semana"
+    else:
+        end_date = ref_date + datetime.timedelta(days=1)
+        title = "📅 Agenda del Día"
+
+    tasks = await task_repo.get_tasks_by_date_range(chat_id, ref_date, end_date)
+    events = await calendar_service.get_upcoming_events(max_results=20, time_min=ref_date)
+    events_filtrados = [e for e in events if _event_in_range(e, ref_date, end_date)]
+
+    await summary_service.send_custom_summary(
+        context.bot, chat_id, tasks, events_filtrados, title
+    )
+
+
+async def handle_buscar(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                       chat_id: str, intent: ParsedIntent):
+    """Maneja BUSCAR - busca en tareas y notas."""
+    query = intent.detalles
+    tasks = await task_repo.search_tasks(chat_id, query)
+    events = await calendar_service.get_upcoming_events(max_results=50)
+    events_filtrados = [e for e in events if query.lower() in e.get('summary', '').lower()]
+
+    await summary_service.send_custom_summary(
+        context.bot, chat_id, tasks, events_filtrados, f"🔍 Resultados: '{query}'"
+    )
+
+
+def _event_starts_today(event: dict, today: datetime.datetime) -> bool:
+    """Verifica si un evento de Calendar empieza hoy."""
+    try:
+        start = event['start'].get('dateTime', event['start'].get('date'))
+        dt = datetime.datetime.fromisoformat(start.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZONA_HORARIA)
+        return dt.date() == today.date()
+    except Exception:
+        return False
+
+
+def _event_in_range(event: dict, start: datetime.datetime, end: datetime.datetime) -> bool:
+    """Verifica si un evento está en el rango."""
+    try:
+        ev_start = event['start'].get('dateTime', event['start'].get('date'))
+        dt = datetime.datetime.fromisoformat(ev_start.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=ZONA_HORARIA)
+        return start <= dt < end
+    except Exception:
+        return False
+
+
+# --- HANDLERS DE MENSAJES ---
+async def recibir_texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await procesar_peticion(update, context, update.message.text)
+
+
+async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await verificar_usuario(update):
+        return
+
+    archivo = await update.message.voice.get_file()
+    ruta_audio = "nota_de_voz.ogg"
+    await archivo.download_to_drive(ruta_audio)
+
+    transcripcion = await ai_service.transcribe_audio(ruta_audio)
+    if transcripcion:
+        await procesar_peticion(update, context, transcripcion)
+    else:
+        await update.message.reply_text("❌ No pude transcribir el audio.")
+
+    try:
+        os.remove(ruta_audio)
+    except Exception:
+        pass
+
+
+async def callback_completar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback para botones de completar/borrar tareas."""
+    query = update.callback_query
+    if str(query.message.chat_id) != settings.mi_telegram_id:
+        return
+
+    data = query.data
+    await query.answer()
+
+    if data.startswith("complete_"):
+        task_id = int(data.split("_")[1])
+        await task_repo.complete(task_id)
+        await query.answer("¡Completada! ✅")
+
+        # Actualizar teclado
+        teclado_actual = query.message.reply_markup.inline_keyboard
+        nuevo_teclado = [[btn] for fila in teclado_actual for btn in fila if btn.callback_data != data]
+
+        if nuevo_teclado:
+            await query.edit_message_reply_markup(InlineKeyboardMarkup(nuevo_teclado))
+        else:
+            await query.edit_message_text(text="¡Todas las tareas de esta lista están listas! 🎉")
+
+    elif data.startswith("delete_"):
+        task_id = int(data.split("_")[1])
+        task = await task_repo.get_task_by_id(task_id)
+        if task and task.calendar_event_id:
+            await calendar_service.delete_event(task.calendar_event_id)
+        await task_repo.delete_by_id(task_id)
+        await query.answer("🗑️ Eliminada")
+
+
+# --- RESUMEN DIARIO ---
+async def enviar_resumen_diario(context: ContextTypes.DEFAULT_TYPE):
+    """Job diario que envía el resumen matutino."""
+    chat_id = settings.mi_telegram_id
+    if not chat_id:
+        return
+
+    await summary_service.send_daily_summary(context.bot, chat_id)
+
+
+# --- STARTUP / MAIN ---
+async def post_init(application: Application):
+    """Inicialización post-arranque: DB, servicios, jobs."""
+    global ai_service, calendar_service, reminder_service, summary_service, task_repo
+
+    logger.info("application_starting")
+
+    # Inicializar DB
+    await init_db()
+
+    # Crear servicios
+    ai_service = AIService()
+    calendar_service = CalendarService()
+    reminder_service = ReminderService()
+
+    # Pool y repo
+    from infrastructure.database.connection import get_pool
+    pool = await get_pool()
+    task_repo = TaskRepository(pool)
+
+    summary_service = SummaryService(task_repo, calendar_service, ai_service)
+
+    # Job diario a las 6:50 AM
+    hora_envio = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
+    application.job_queue.run_daily(enviar_resumen_diario, time=hora_envio)
+
+    logger.info("application_ready", services=["ai", "calendar", "reminder", "summary", "db"])
+
+
+async def post_shutdown(application: Application):
+    """Limpieza al apagar."""
+    logger.info("application_shutting_down")
+    await close_pool()
 
 
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
+    """Punto de entrada principal."""
+    app = Application.builder().token(settings.telegram_token).build()
+
+    # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("resumen", test_resumen))
+    app.add_handler(CommandHandler("ayuda", ayuda))
+    app.add_handler(CommandHandler("test", test_sistema))
     app.add_handler(CommandHandler("notas", ver_notas))
+    app.add_handler(CommandHandler("hoy", ver_hoy))
+    app.add_handler(CommandHandler("semana", ver_semana))
+    app.add_handler(CommandHandler("buscar", buscar))
+    app.add_handler(CommandHandler("tag", filtrar_tag))
+    app.add_handler(CommandHandler("resumen", lambda u, c: summary_service.send_daily_summary(c.bot, settings.mi_telegram_id)))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_texto))
     app.add_handler(MessageHandler(filters.VOICE, recibir_audio))
-    app.add_handler(CallbackQueryHandler(marcar_completada, pattern="^ok_"))
-    
-    hora_envio = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
-    app.job_queue.run_daily(enviar_resumen_diario, time=hora_envio)
-    
-    # Inicia el servidor web simulado en segundo plano
-    threading.Thread(target=iniciar_servidor, daemon=True).start()
-    
-    print("Bot privado con soporte para Render iniciado.")
+    app.add_handler(CallbackQueryHandler(callback_completar, pattern="^(complete_|delete_)"))
+
+    # Lifecycle hooks
+    app.post_init = post_init
+    app.post_shutdown = post_shutdown
+
+    # Iniciar servidor web para health checks en hilo separado
+    threading.Thread(target=iniciar_servidor_web, daemon=True).start()
+
+    logger.info("bot_starting_polling")
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()

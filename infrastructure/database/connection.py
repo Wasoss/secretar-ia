@@ -2,6 +2,7 @@
 Pool de conexiones asíncrono a PostgreSQL usando asyncpg.
 
 Proporciona conexión pooling eficiente para uso en handlers async.
+Versión mejorada con migración automática de schema.
 """
 import asyncpg
 from config.settings import settings
@@ -51,13 +52,13 @@ async def close_pool() -> None:
 
 async def init_db() -> None:
     """
-    Inicializa las tablas necesarias (idempotente).
+    Inicializa las tablas necesarias (idempotente) y ejecuta migraciones.
 
     Se ejecuta al startup de la aplicación.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
-        # Tabla de tareas y notas
+        # Tabla de tareas y notas - CON TODOS LOS CAMPOS NUEVOS
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS tareas (
                 id SERIAL PRIMARY KEY,
@@ -67,7 +68,12 @@ async def init_db() -> None:
                 fecha_hora TIMESTAMPTZ,
                 estado TEXT NOT NULL DEFAULT 'PENDIENTE',
                 creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                -- Nuevos campos
+                recurrencia TEXT,
+                prioridad INTEGER NOT NULL DEFAULT 0,
+                tags TEXT[] NOT NULL DEFAULT '{}',
+                calendar_event_id TEXT
             )
         """)
 
@@ -80,6 +86,18 @@ async def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_tareas_fecha_hora
             ON tareas (fecha_hora)
         """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tareas_tags
+            ON tareas USING GIN (tags)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tareas_calendar_event
+            ON tareas (calendar_event_id)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tareas_recurrencia
+            ON tareas (recurrencia) WHERE recurrencia IS NOT NULL
+        """)
 
         # Tabla de credenciales (tokens OAuth, etc.)
         await conn.execute("""
@@ -91,4 +109,52 @@ async def init_db() -> None:
             )
         """)
 
+    # Ejecutar migraciones para agregar columnas faltantes en tablas existentes
+    await _run_migrations(pool)
+
     logger.info("database_initialized", tables=["tareas", "credenciales"])
+
+
+async def _run_migrations(pool: asyncpg.Pool) -> None:
+    """Ejecuta migraciones idempotentes para agregar columnas nuevas."""
+    async with pool.acquire() as conn:
+        # Verificar y agregar columnas a 'tareas' si no existen
+        columns_to_add = [
+            ("recurrencia", "TEXT"),
+            ("prioridad", "INTEGER NOT NULL DEFAULT 0"),
+            ("tags", "TEXT[] NOT NULL DEFAULT '{}'"),
+            ("calendar_event_id", "TEXT"),
+        ]
+
+        for col_name, col_type in columns_to_add:
+            try:
+                await conn.execute(f"""
+                    ALTER TABLE tareas
+                    ADD COLUMN IF NOT EXISTS {col_name} {col_type}
+                """)
+                logger.debug("migration_column_added", column=col_name)
+            except Exception as e:
+                logger.warning("migration_column_failed", column=col_name, error=str(e))
+
+        # Verificar y agregar columnas a 'credenciales' si no existen
+        try:
+            await conn.execute("""
+                ALTER TABLE credenciales
+                ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            """)
+        except Exception as e:
+            logger.warning("migration_credenciales_failed", error=str(e))
+
+        # Re-crear índices si no existen (idempotente)
+        indexes = [
+            ("idx_tareas_tags", "CREATE INDEX IF NOT EXISTS idx_tareas_tags ON tareas USING GIN (tags)"),
+            ("idx_tareas_calendar_event", "CREATE INDEX IF NOT EXISTS idx_tareas_calendar_event ON tareas (calendar_event_id)"),
+            ("idx_tareas_recurrencia", "CREATE INDEX IF NOT EXISTS idx_tareas_recurrencia ON tareas (recurrencia) WHERE recurrencia IS NOT NULL"),
+        ]
+
+        for idx_name, idx_sql in indexes:
+            try:
+                await conn.execute(idx_sql)
+                logger.debug("migration_index_created", index=idx_name)
+            except Exception as e:
+                logger.warning("migration_index_failed", index=idx_name, error=str(e))
