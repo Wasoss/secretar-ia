@@ -37,6 +37,7 @@ class ActionType(str, Enum):
     REAGENDAR = "REAGENDAR"
     LISTAR = "LISTAR"
     BUSCAR = "BUSCAR"
+    TAREA_DIARIA = "TAREA_DIARIA"
     ERROR = "ERROR"
 
 
@@ -94,6 +95,7 @@ Tu rol: Gestionar agenda, recordatorios y notas de forma PROACTIVA y PRECISA. En
 8. REAGENDAR: Cambiar fecha/hora de evento/recordatorio existente. Requiere: tarea_original_id (si se sabe), nuevo fecha_hora, detalles.
 9. LISTAR: Mostrar tareas/eventos (hoy, semana, pendientes, por tag).
 10. BUSCAR: Buscar en notas/eventos por palabras clave.
+11. TAREA_DIARIA: Lista de tareas del día con sub-items para tachar. Incluye: título de la lista, sub-items separados por comas/"y"/saltos de línea. Sin fecha_hora (es para hoy).
 
 === REGLAS DE ORO ===
 R1: CITA/TURNO/REUNIÓN → EVENTO (va a Google Calendar)
@@ -106,6 +108,7 @@ R7: "BORRAR TODO DEL [DÍA]" → ELIMINAR_FECHA
 R8: "CAMBIAR"/"MOVER"/"REAGENDAR"/"REEMPLAZAR" → REAGENDAR (buscar tarea original)
 R9: "QUÉ TENGO"/"LISTAR"/"MOSTRAR"/"AGENDA" → LISTAR
 R10: "BUSCAR"/"ENCONTRAR"/"DÓNDE PUSE" → BUSCAR
+R11: "LISTA DE [HOY/MAÑANA]"/"TAREAS DE [HOY/MAÑANA]"/"LISTA DIARIA" → TAREA_DIARIA (lista con sub-items para tachar)
 
 === FECHAS RELATIVAS (siempre resolver a YYYY-MM-DD HH:MM) ===
 - "hoy" → fecha actual
@@ -139,9 +142,9 @@ Extraer hashtags o palabras clave: #trabajo #personal #salud #familia #estudio
 
 === RESPUESTA JSON ESTRICTA ===
 {{
-  "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR",
-  "detalles": "Resumen claro y accionable",
-  "fecha_hora": "YYYY-MM-DD HH:MM o null",
+  "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR|TAREA_DIARIA",
+  "detalles": "Resumen claro y accionable (para TAREA_DIARIA: lista de items separados por comas)",
+  "fecha_hora": "YYYY-MM-DD HH:MM o null (para TAREA_DIARIA siempre null)",
   "recurrencia": "RRULE string o null",
   "prioridad": -1|0|1,
   "tags": ["tag1", "tag2"],
@@ -161,6 +164,9 @@ Usuario: "Cambia la reunión de Juan al miércoles a las 15hs"
 
 Usuario: "¿Qué tengo el viernes?"
 → {{"accion":"LISTAR","detalles":"Eventos y tareas del viernes","fecha_hora":"2025-01-17 00:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
+
+Usuario: "Lista de hoy: estudiar lógica, preparar clases para la semana (filosofía miércoles 28, religión martes 27), limpiar piso y comedor"
+→ {{"accion":"TAREA_DIARIA","detalles":"estudiar lógica, preparar clases para la semana (filosofía miércoles 28, religión martes 27), limpiar piso y comedor","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["estudio","trabajo","hogar"],"tarea_original_id":null,"confianza":0.9}}
 """.strip()
 
 

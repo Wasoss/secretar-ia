@@ -36,34 +36,68 @@ class SummaryService:
     async def send_daily_summary(self, bot: Bot, chat_id: str) -> None:
         """
         Envía el resumen diario al usuario con sugerencia proactiva.
+        Muestra eventos de HOY y MAÑANA, tareas pendientes y tareas diarias.
 
         Args:
             bot: Instancia de Bot de Telegram
             chat_id: Chat ID del usuario
         """
         try:
+            from datetime import datetime, timedelta
+
+            # Calcular rango: hoy 00:00 hasta mañana 23:59
+            hoy = datetime.now(settings.tz).replace(hour=0, minute=0, second=0, microsecond=0)
+            manana = hoy + timedelta(days=1)
+            pasado_manana = hoy + timedelta(days=2)
+
             # Obtener datos en paralelo
             pending_tasks = await self._task_repo.get_pending(chat_id)
-            calendar_events = await self._calendar_service.get_upcoming_events(max_results=5)
+            daily_tasks = await self._task_repo.get_daily_tasks(chat_id)
 
-            if not pending_tasks and not calendar_events:
+            # Eventos de hoy y mañana
+            calendar_events = await self._calendar_service.get_upcoming_events(max_results=10, time_min=hoy)
+
+            # Filtrar eventos de hoy y mañana
+            events_hoy = []
+            events_manana = []
+            for evento in calendar_events:
+                inicio = evento['start'].get('dateTime', evento['start'].get('date'))
+                try:
+                    dt = datetime.fromisoformat(inicio.replace('Z', '+00:00'))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=settings.tz)
+                    if dt < manana:
+                        events_hoy.append(evento)
+                    elif dt < pasado_manana:
+                        events_manana.append(evento)
+                except Exception:
+                    events_hoy.append(evento)  # Por defecto a hoy si hay error
+
+            if not pending_tasks and not daily_tasks and not events_hoy and not events_manana:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text="¡Buen día! ☀️ No tenés tareas ni eventos próximos."
+                    text="¡Buen día! ☀️ No tenés tareas ni eventos para hoy ni mañana."
                 )
-                # Aun así intentar sugerencia proactiva
-                await self._send_proactive_suggestion(bot, chat_id, [], [])
                 return
 
             mensaje = "¡Buen día! ☀️ Acá tenés tu resumen:\n\n"
 
-            # Eventos de Calendar
-            if calendar_events:
-                mensaje += "📅 <b>Próximos eventos (Calendar):</b>\n"
-                for evento in calendar_events:
+            # Eventos de HOY
+            if events_hoy:
+                mensaje += "📅 <b>Eventos de HOY:</b>\n"
+                for evento in events_hoy:
                     inicio = evento['start'].get('dateTime', evento['start'].get('date'))
                     fecha_str = self._format_fecha(inicio)
-                    # Mostrar si es recurrente
+                    rec_indicator = " 🔄" if evento.get('recurrence') else ""
+                    mensaje += f"▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>){rec_indicator}\n"
+                mensaje += "\n"
+
+            # Eventos de MAÑANA
+            if events_manana:
+                mensaje += "📅 <b>Eventos de MAÑANA:</b>\n"
+                for evento in events_manana:
+                    inicio = evento['start'].get('dateTime', evento['start'].get('date'))
+                    fecha_str = self._format_fecha(inicio)
                     rec_indicator = " 🔄" if evento.get('recurrence') else ""
                     mensaje += f"▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>){rec_indicator}\n"
                 mensaje += "\n"
@@ -89,13 +123,51 @@ class SummaryService:
                         )
                     ])
 
-                teclado = InlineKeyboardMarkup(botones)
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=mensaje,
-                    reply_markup=teclado,
-                    parse_mode=ParseMode.HTML
-                )
+            # Tareas diarias (TAREA_DIARIA) con sub-items
+            if daily_tasks:
+                if pending_tasks:
+                    mensaje += "\n"
+                mensaje += "☑️ <b>Tareas diarias de hoy:</b>\n"
+                botones = []
+                for tarea in daily_tasks:
+                    pending_subs = tarea.get_pending_subtasks()
+                    completed_subs = tarea.get_completed_subtasks()
+                    total_subs = len(tarea.subtareas)
+
+                    if total_subs > 0:
+                        progress = f" ({len(completed_subs)}/{total_subs})"
+                    else:
+                        progress = ""
+
+                    mensaje += f"▷ <b>{tarea.detalles}</b>{progress}\n"
+
+                    # Sub-items pendientes con botones para marcar
+                    for sub in pending_subs:
+                        botones.append([
+                            InlineKeyboardButton(
+                                f"☑️ {sub.texto[:35]}",
+                                callback_data=f"subtask_{tarea.id}_{sub.id}"
+                            )
+                        ])
+                    # Sub-items completados (mostrar tachados)
+                    for sub in completed_subs:
+                        mensaje += f"  ~~{sub.texto}~~ ✅\n"
+
+            if pending_tasks or daily_tasks:
+                if botones:
+                    teclado = InlineKeyboardMarkup(botones)
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=mensaje,
+                        reply_markup=teclado,
+                        parse_mode=ParseMode.HTML
+                    )
+                else:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=mensaje,
+                        parse_mode=ParseMode.HTML
+                    )
             else:
                 await bot.send_message(
                     chat_id=chat_id,
@@ -104,7 +176,8 @@ class SummaryService:
                 )
 
             logger.info("daily_summary_sent", chat_id=chat_id,
-                       tasks=len(pending_tasks), events=len(calendar_events))
+                       tasks=len(pending_tasks), daily_tasks=len(daily_tasks),
+                       events=len(events_hoy) + len(events_manana))
 
             # Enviar sugerencia proactiva si hay IA disponible
             await self._send_proactive_suggestion(bot, chat_id, pending_tasks, calendar_events)

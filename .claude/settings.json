@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem)",
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(ls)",
+      "PowerShell(ls *)",
+      "PowerShell(pwd)",
+      "PowerShell(Measure-Object)",
+      "PowerShell(Measure-Object *)",
+      "PowerShell(Get-Location)",
+      "PowerShell(Get-Item)",
+      "PowerShell(Get-Item *)",
+      "PowerShell(Test-Path)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Select-Object)",
+      "PowerShell(Select-Object *)",
+      "PowerShell(Where-Object)",
+      "PowerShell(Where-Object *)",
+      "PowerShell(ForEach-Object)",
+      "PowerShell(ForEach-Object *)"
+    ]
+  }
+}

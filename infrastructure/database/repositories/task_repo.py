@@ -8,12 +8,14 @@ Versión mejorada con:
 - Sincronización con Google Calendar (calendar_event_id)
 - Búsqueda full-text
 - Listado con filtros
+- **Tareas diarias con sub-items (TAREA_DIARIA)**
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from enum import Enum
 import asyncpg
+import json
 
 from config.logging import get_logger
 
@@ -25,12 +27,22 @@ class TaskType(str, Enum):
     EVENTO = "EVENTO"
     RECORDATORIO = "RECORDATORIO"
     NOTA = "NOTA"
+    TAREA_DIARIA = "TAREA_DIARIA"  # Lista de tareas diarias con sub-items
 
 
 class TaskStatus(str, Enum):
     """Estados posibles de una tarea."""
     PENDIENTE = "PENDIENTE"
     COMPLETADO = "COMPLETADO"
+
+
+@dataclass(slots=True)
+class SubTask:
+    """Sub-item de una tarea diaria."""
+    id: str  # UUID corto para identificar el sub-item
+    texto: str
+    completado: bool = False
+    orden: int = 0
 
 
 @dataclass(slots=True)
@@ -47,12 +59,22 @@ class Task:
     # Nuevos campos
     recurrencia: Optional[str] = None
     prioridad: int = 0
-    tags: List[str] = None
+    tags: List[str] = field(default_factory=list)
     calendar_event_id: Optional[str] = None
+    # Para TAREA_DIARIA: lista de sub-items
+    subtareas: List[SubTask] = field(default_factory=list)
 
-    def __post_init__(self):
-        if self.tags is None:
-            self.tags = []
+    def get_pending_subtasks(self) -> List[SubTask]:
+        """Retorna sub-tareas pendientes."""
+        return [st for st in self.subtareas if not st.completado]
+
+    def get_completed_subtasks(self) -> List[SubTask]:
+        """Retorna sub-tareas completadas."""
+        return [st for st in self.subtareas if st.completado]
+
+    def is_fully_completed(self) -> bool:
+        """Verifica si todas las sub-tareas están completadas."""
+        return len(self.subtareas) > 0 and all(st.completado for st in self.subtareas)
 
 
 class TaskRepository:
@@ -72,41 +94,53 @@ class TaskRepository:
         prioridad: int = 0,
         tags: Optional[List[str]] = None,
         calendar_event_id: Optional[str] = None,
+        subtareas: Optional[List[SubTask]] = None,
     ) -> int:
         """
         Guarda una nueva tarea.
 
         Args:
             telefono_id: ID del usuario (chat_id de Telegram)
-            tipo: Tipo de tarea (EVENTO, RECORDATORIO, NOTA)
-            detalles: Descripción de la tarea
+            tipo: Tipo de tarea (EVENTO, RECORDATORIO, NOTA, TAREA_DIARIA)
+            detalles: Descripción de la tarea (título de la lista para TAREA_DIARIA)
             fecha_hora: Fecha/hora opcional (aware datetime)
             estado: Estado inicial (default: PENDIENTE)
             recurrencia: RRULE string opcional
             prioridad: -1 (baja), 0 (normal), 1 (alta)
             tags: Lista de tags
             calendar_event_id: ID de evento en Google Calendar
+            subtareas: Lista de sub-items (para TAREA_DIARIA)
 
         Returns:
             ID de la tarea creada
         """
         if tags is None:
             tags = []
+        if subtareas is None:
+            subtareas = []
+
+        # Serializar subtareas a JSON
+        subtareas_json = json.dumps([{
+            "id": st.id,
+            "texto": st.texto,
+            "completado": st.completado,
+            "orden": st.orden
+        } for st in subtareas])
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
                 INSERT INTO tareas (
                     telefono_id, tipo, detalles, fecha_hora, estado,
-                    recurrencia, prioridad, tags, calendar_event_id
+                    recurrencia, prioridad, tags, calendar_event_id, subtareas
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING id
             """, telefono_id, tipo.value, detalles, fecha_hora, estado.value,
-                recurrencia, prioridad, tags, calendar_event_id)
+                recurrencia, prioridad, tags, calendar_event_id, subtareas_json)
 
         task_id = row["id"]
         logger.info("task_saved", task_id=task_id, tipo=tipo.value,
-                   telefono_id=telefono_id, has_recurrence=bool(recurrencia))
+                   telefono_id=telefono_id, has_subtareas=len(subtareas) > 0)
         return task_id
 
     async def get_pending(self, telefono_id: str) -> List[Task]:
@@ -114,7 +148,7 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                 FROM tareas
                 WHERE telefono_id = $1 AND estado = $2
                 ORDER BY
@@ -130,11 +164,24 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                 FROM tareas
                 WHERE telefono_id = $1 AND tipo = $2 AND estado = $3
                 ORDER BY creado_en DESC
             """, telefono_id, TaskType.NOTA.value, TaskStatus.PENDIENTE.value)
+
+        return [self._row_to_task(row) for row in rows]
+
+    async def get_daily_tasks(self, telefono_id: str) -> List[Task]:
+        """Obtiene tareas diarias (TAREA_DIARIA) pendientes del usuario."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
+                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
+                FROM tareas
+                WHERE telefono_id = $1 AND tipo = $2 AND estado = $3
+                ORDER BY creado_en DESC
+            """, telefono_id, TaskType.TAREA_DIARIA.value, TaskStatus.PENDIENTE.value)
 
         return [self._row_to_task(row) for row in rows]
 
@@ -143,7 +190,7 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                 FROM tareas
                 WHERE telefono_id = $1
                 ORDER BY id DESC
@@ -157,7 +204,7 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                 FROM tareas
                 WHERE id = $1
             """, task_id)
@@ -176,7 +223,7 @@ class TaskRepository:
             if estado:
                 rows = await conn.fetch("""
                     SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                     FROM tareas
                     WHERE telefono_id = $1 AND estado = $2
                     AND fecha_hora >= $3 AND fecha_hora < $4
@@ -185,7 +232,7 @@ class TaskRepository:
             else:
                 rows = await conn.fetch("""
                     SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                     FROM tareas
                     WHERE telefono_id = $1
                     AND fecha_hora >= $2 AND fecha_hora < $3
@@ -208,7 +255,7 @@ class TaskRepository:
             if estado:
                 rows = await conn.fetch("""
                     SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                     FROM tareas
                     WHERE telefono_id = $1 AND estado = $2
                     AND (detalles ILIKE $3 OR tags && string_to_array($3, ' '))
@@ -221,7 +268,7 @@ class TaskRepository:
             else:
                 rows = await conn.fetch("""
                     SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                     FROM tareas
                     WHERE telefono_id = $1
                     AND (detalles ILIKE $2 OR tags && string_to_array($2, ' '))
@@ -245,7 +292,7 @@ class TaskRepository:
             if estado:
                 rows = await conn.fetch("""
                     SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                     FROM tareas
                     WHERE telefono_id = $1 AND estado = $2
                     AND $3 = ANY(tags)
@@ -254,7 +301,7 @@ class TaskRepository:
             else:
                 rows = await conn.fetch("""
                     SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                           creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                     FROM tareas
                     WHERE telefono_id = $1
                     AND $2 = ANY(tags)
@@ -282,6 +329,48 @@ class TaskRepository:
             logger.info("task_completed", task_id=task_id)
         else:
             logger.warning("task_complete_not_found_or_already_done", task_id=task_id)
+        return updated
+
+    async def complete_subtask(self, task_id: int, subtask_id: str) -> bool:
+        """
+        Marca un sub-item de una TAREA_DIARIA como completado.
+
+        Returns:
+            True si se actualizó, False si no existía
+        """
+        task = await self.get_task_by_id(task_id)
+        if not task or task.tipo != TaskType.TAREA_DIARIA:
+            return False
+
+        # Buscar y actualizar el sub-item
+        updated = False
+        for st in task.subtareas:
+            if st.id == subtask_id:
+                st.completado = True
+                updated = True
+                break
+
+        if not updated:
+            return False
+
+        # Serializar subtareas actualizadas
+        subtareas_json = json.dumps([{
+            "id": st.id,
+            "texto": st.texto,
+            "completado": st.completado,
+            "orden": st.orden
+        } for st in task.subtareas])
+
+        async with self._pool.acquire() as conn:
+            result = await conn.execute("""
+                UPDATE tareas
+                SET subtareas = $1, actualizado_en = NOW()
+                WHERE id = $2
+            """, subtareas_json, task_id)
+
+        updated = result == "UPDATE 1"
+        if updated:
+            logger.info("subtask_completed", task_id=task_id, subtask_id=subtask_id)
         return updated
 
     async def delete_by_id(self, task_id: int) -> bool:
@@ -391,7 +480,7 @@ class TaskRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
                 SELECT id, telefono_id, tipo, detalles, fecha_hora, estado,
-                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id
+                       creado_en, actualizado_en, recurrencia, prioridad, tags, calendar_event_id, subtareas
                 FROM tareas
                 WHERE telefono_id = $1 AND estado = $2 AND recurrencia IS NOT NULL
                 ORDER BY fecha_hora NULLS LAST, creado_en
@@ -401,6 +490,15 @@ class TaskRepository:
 
     def _row_to_task(self, row: asyncpg.Record) -> Task:
         """Convierte un record de asyncpg a entidad Task."""
+        # Parsear subtareas JSON
+        subtareas = []
+        if row["subtareas"]:
+            try:
+                subtareas_data = json.loads(row["subtareas"]) if isinstance(row["subtareas"], str) else row["subtareas"]
+                subtareas = [SubTask(**st) for st in subtareas_data]
+            except Exception:
+                subtareas = []
+
         return Task(
             id=row["id"],
             telefono_id=row["telefono_id"],
@@ -414,4 +512,5 @@ class TaskRepository:
             prioridad=row["prioridad"] or 0,
             tags=row["tags"] or [],
             calendar_event_id=row["calendar_event_id"],
+            subtareas=subtareas,
         )

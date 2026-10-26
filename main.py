@@ -23,7 +23,7 @@ from application.services.calendar_service import CalendarService
 from application.services.reminder_service import ReminderService
 from application.services.summary_service import SummaryService
 from infrastructure.database.connection import init_db, close_pool
-from infrastructure.database.repositories.task_repo import TaskRepository, TaskType, TaskStatus
+from infrastructure.database.repositories.task_repo import TaskRepository, TaskType, TaskStatus, SubTask
 
 load_dotenv()
 
@@ -106,8 +106,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <i>\"Reunión con Juan el próximo martes a las 14hs, urgente #trabajo\"</i>\n"
         "• <i>\"Recordame tomar agua cada hora en días hábiles\"</i>\n"
         "• <i>\"Cambia la reunión de Juan al miércoles a las 15hs\"</i>\n"
-        "• <i>\"Qué tengo el viernes\"</i> / <i>\"Buscar nota wifi\"</i>\n\n"
-        "Comandos: /resumen /notas /ayuda /test",
+        "• <i>\"Qué tengo el viernes\"</i> / <i>\"Buscar nota wifi\"</i>\n"
+        "• <i>\"Lista de tareas de hoy: estudiar lógica, preparar clases, limpiar piso\"</i>\n\n"
+        "Comandos: /resumen /pendientes /notas /ayuda /test",
         parse_mode=ParseMode.HTML
     )
 
@@ -134,12 +135,16 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📔 <b>Notas (sin fecha):</b>\n"
         "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
         "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
+        "☑️ <b>Tareas diarias (lista con sub-items):</b>\n"
+        "  <i>\"Lista de hoy: estudiar lógica, preparar clases (filosofía miércoles 28, religión martes 27), limpiar piso y comedor\"</i>\n"
+        "  → Se crea una lista con checkboxes para tachar individualmente\n\n"
         "🔧 <b>Gestión avanzada:</b>\n"
         "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
         "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
         "  <i>\"Deshacer\"</i> (borra último)\n\n"
         "📋 <b>Comandos:</b>\n"
-        "  /resumen — Ver tareas y eventos próximos\n"
+        "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)\n"
+        "  /pendientes — Ver tareas diarias con sub-items para tachar\n"
         "  /notas — Consultar notas guardadas\n"
         "  /hoy — Ver agenda de hoy\n"
         "  /semana — Ver agenda de la semana\n"
@@ -149,7 +154,8 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  /test — Diagnóstico del sistema\n\n"
         "💡 <b>Tips:</b> Usá #tag para organizar. "
         "Palabras clave: <i>urgente</i> (prioridad alta), "
-        "<i>no apura</i> (baja)."
+        "<i>no apura</i> (baja).\n"
+        "Para lista diaria: decí <i>\"Lista de hoy: ...\"</i> o <i>\"Tareas de hoy: ...\"</i>"
     )
     await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
 
@@ -283,6 +289,63 @@ async def filtrar_tag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def ver_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /pendientes - Ver tareas diarias con sub-items para tachar."""
+    if not await verificar_usuario(update):
+        return
+
+    chat_id = str(update.message.chat_id)
+    daily_tasks = await task_repo.get_daily_tasks(chat_id)
+
+    if not daily_tasks:
+        await update.message.reply_text(
+            "☑️ No tenés listas de tareas diarias activas.\n"
+            "Crea una diciendo: <i>\"Lista de hoy: estudiar, preparar clases, limpiar\"</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    mensaje = "☑️ <b>Tareas diarias pendientes:</b>\n\n"
+    botones = []
+
+    for tarea in daily_tasks:
+        pending_subs = tarea.get_pending_subtasks()
+        completed_subs = tarea.get_completed_subtasks()
+        total_subs = len(tarea.subtareas)
+
+        if total_subs > 0:
+            progress = f" ({len(completed_subs)}/{total_subs})"
+        else:
+            progress = ""
+
+        mensaje += f"▷ <b>{tarea.detalles}</b>{progress}\n"
+
+        # Sub-items pendientes con botones para marcar
+        for sub in pending_subs:
+            botones.append([
+                InlineKeyboardButton(
+                    f"☑️ {sub.texto[:35]}",
+                    callback_data=f"subtask_{tarea.id}_{sub.id}"
+                )
+            ])
+        # Sub-items completados (mostrar tachados)
+        for sub in completed_subs:
+            mensaje += f"  ~~{sub.texto}~~ ✅\n"
+
+    if botones:
+        teclado = InlineKeyboardMarkup(botones)
+        await update.message.reply_text(
+            text=mensaje,
+            reply_markup=teclado,
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text(
+            text=mensaje + "\n✅ ¡Todas las sub-tareas completadas!",
+            parse_mode=ParseMode.HTML
+        )
+
+
 # --- PROCESAMIENTO PRINCIPAL ---
 async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, texto_usuario: str):
     """Procesa el texto del usuario usando el servicio de IA enriquecido."""
@@ -330,6 +393,10 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     if intent.accion == ActionType.BUSCAR:
         await handle_buscar(update, context, chat_id, intent)
+        return
+
+    if intent.accion == ActionType.TAREA_DIARIA:
+        await handle_guardar_tarea_diaria(update, context, chat_id, intent)
         return
 
     # Acciones que guardan en BD: EVENTO, RECORDATORIO, NOTA
@@ -400,6 +467,70 @@ async def handle_guardar_tarea(update: Update, context: ContextTypes.DEFAULT_TYP
             respuesta += " ⚠️ No se pudo programar la alarma (¿fecha pasada?)."
 
     await update.message.reply_text(respuesta, parse_mode=ParseMode.HTML)
+
+
+async def handle_guardar_tarea_diaria(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                       chat_id: str, intent: ParsedIntent):
+    """Guarda una TAREA_DIARIA con sub-items en BD."""
+    import uuid
+
+    # Parsear los sub-items del texto (separados por comas, "y", saltos de línea)
+    texto = intent.detalles
+    # Separadores comunes: coma, "y", salto de línea, punto y coma
+    import re
+    items = re.split(r'[,;\n]|\\s+y\\s+', texto)
+    items = [item.strip() for item in items if item.strip()]
+
+    if not items:
+        await update.message.reply_text("❌ No pude identificar los items de la lista. Probá: \"Lista de hoy: estudiar, preparar clases, limpiar\"")
+        return
+
+    # Crear sub-items con IDs únicos
+    subtareas = []
+    for i, item in enumerate(items):
+        subtareas.append(SubTask(
+            id=str(uuid.uuid4())[:8],  # ID corto
+            texto=item,
+            completado=False,
+            orden=i
+        ))
+
+    # Guardar en BD como TAREA_DIARIA
+    task_id = await task_repo.save(
+        telefono_id=chat_id,
+        tipo=TaskType.TAREA_DIARIA,
+        detalles=texto,  # Título de la lista
+        fecha_hora=None,  # Sin fecha específica, es para hoy
+        estado=TaskStatus.PENDIENTE,
+        prioridad=intent.prioridad,
+        tags=intent.tags,
+        subtareas=subtareas,
+    )
+
+    # Respuesta con botones para tachar
+    mensaje = f"☑️ <b>Lista diaria creada</b> (ID: {task_id})\n"
+    mensaje += f"📝 {texto}\n\n"
+
+    botones = []
+    for sub in subtareas:
+        botones.append([
+            InlineKeyboardButton(
+                f"☑️ {sub.texto[:35]}",
+                callback_data=f"subtask_{task_id}_{sub.id}"
+            )
+        ])
+        mensaje += f"  ☐ {sub.texto}\n"
+
+    mensaje += f"\n📋 Total: {len(subtareas)} items"
+    if intent.prioridad == 1:
+        mensaje += " 🔴"
+    elif intent.prioridad == -1:
+        mensaje += " 🟢"
+    if intent.tags:
+        mensaje += f" #{' #'.join(intent.tags)}"
+
+    teclado = InlineKeyboardMarkup(botones)
+    await update.message.reply_text(mensaje, reply_markup=teclado, parse_mode=ParseMode.HTML)
 
 
 def _build_confirmation_message(intent: ParsedIntent, task_id: int, calendar_event_id: Optional[str]) -> str:
@@ -673,7 +804,7 @@ async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def callback_completar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback para botones de completar/borrar tareas."""
+    """Callback para botones de completar/borrar tareas y sub-tareas."""
     query = update.callback_query
     if str(query.message.chat_id) != settings.mi_telegram_id:
         return
@@ -702,6 +833,53 @@ async def callback_completar(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await calendar_service.delete_event(task.calendar_event_id)
         await task_repo.delete_by_id(task_id)
         await query.answer("🗑️ Eliminada")
+
+    elif data.startswith("subtask_"):
+        # Formato: subtask_{task_id}_{subtask_id}
+        parts = data.split("_")
+        if len(parts) >= 3:
+            task_id = int(parts[1])
+            subtask_id = parts[2]
+            success = await task_repo.complete_subtask(task_id, subtask_id)
+            if success:
+                await query.answer("¡Sub-tarea completada! ✅")
+                # Refrescar el mensaje para mostrar el estado actualizado
+                task = await task_repo.get_task_by_id(task_id)
+                if task:
+                    # Re-construir el mensaje con estado actualizado
+                    pending_subs = task.get_pending_subtasks()
+                    completed_subs = task.get_completed_subtasks()
+                    total_subs = len(task.subtareas)
+
+                    mensaje = f"☑️ <b>{task.detalles}</b> ({len(completed_subs)}/{total_subs})\n\n"
+
+                    botones = []
+                    for sub in pending_subs:
+                        botones.append([
+                            InlineKeyboardButton(
+                                f"☑️ {sub.texto[:35]}",
+                                callback_data=f"subtask_{task_id}_{sub.id}"
+                            )
+                        ])
+                    for sub in completed_subs:
+                        mensaje += f"  ~~{sub.texto}~~ ✅\n"
+
+                    if botones:
+                        teclado = InlineKeyboardMarkup(botones)
+                        await query.edit_message_text(
+                            text=mensaje,
+                            reply_markup=teclado,
+                            parse_mode=ParseMode.HTML
+                        )
+                    else:
+                        await query.edit_message_text(
+                            text=mensaje + "\n✅ ¡Todas las sub-tareas completadas!",
+                            parse_mode=ParseMode.HTML
+                        )
+            else:
+                await query.answer("❌ No se pudo completar la sub-tarea")
+        else:
+            await query.answer("❌ Formato de callback inválido")
 
 
 # --- RESUMEN DIARIO ---
@@ -762,11 +940,12 @@ def main():
     app.add_handler(CommandHandler("semana", ver_semana))
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("tag", filtrar_tag))
+    app.add_handler(CommandHandler("pendientes", ver_pendientes))
     app.add_handler(CommandHandler("resumen", lambda u, c: summary_service.send_daily_summary(c.bot, settings.mi_telegram_id)))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, recibir_texto))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.Document.AUDIO, recibir_audio))
-    app.add_handler(CallbackQueryHandler(callback_completar, pattern="^(complete_|delete_)"))
+    app.add_handler(CallbackQueryHandler(callback_completar, pattern="^(complete_|delete_|subtask_)"))
 
     # Lifecycle hooks
     app.post_init = post_init

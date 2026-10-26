@@ -82,7 +82,8 @@ async def init_db() -> None:
                 recurrencia TEXT,
                 prioridad INTEGER NOT NULL DEFAULT 0,
                 tags TEXT[] NOT NULL DEFAULT '{}',
-                calendar_event_id TEXT
+                calendar_event_id TEXT,
+                subtareas JSONB
             )
         """)
 
@@ -130,6 +131,7 @@ async def _run_migrations(pool: asyncpg.Pool) -> None:
             ("prioridad", "INTEGER NOT NULL DEFAULT 0"),
             ("tags", "TEXT[] NOT NULL DEFAULT '{}'"),
             ("calendar_event_id", "TEXT"),
+            ("subtareas", "JSONB"),
         ]
 
         for col_name, col_type in columns_to_add:
