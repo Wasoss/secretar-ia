@@ -55,8 +55,17 @@ async def init_db() -> None:
     Inicializa las tablas necesarias (idempotente) y ejecuta migraciones.
 
     Se ejecuta al startup de la aplicación.
+    Orden correcto:
+    1. Ejecutar migraciones primero (agregar columnas a tablas existentes)
+    2. Crear tablas si no existen (con todas las columnas)
+    3. Crear índices
     """
     pool = await get_pool()
+
+    # 1. PRIMERO: Ejecutar migraciones para agregar columnas faltantes en tablas existentes
+    await _run_migrations(pool)
+
+    # 2. LUEGO: Crear tablas e índices (idempotente)
     async with pool.acquire() as conn:
         # Tabla de tareas y notas - CON TODOS LOS CAMPOS NUEVOS
         await conn.execute("""
@@ -109,9 +118,6 @@ async def init_db() -> None:
             )
         """)
 
-    # Ejecutar migraciones para agregar columnas faltantes en tablas existentes
-    await _run_migrations(pool)
-
     logger.info("database_initialized", tables=["tareas", "credenciales"])
 
 
@@ -145,7 +151,7 @@ async def _run_migrations(pool: asyncpg.Pool) -> None:
         except Exception as e:
             logger.warning("migration_credenciales_failed", error=str(e))
 
-        # Re-crear índices si no existen (idempotente)
+        # Re-crear índices si no existen (idempotente) - estos se crean también en init_db
         indexes = [
             ("idx_tareas_tags", "CREATE INDEX IF NOT EXISTS idx_tareas_tags ON tareas USING GIN (tags)"),
             ("idx_tareas_calendar_event", "CREATE INDEX IF NOT EXISTS idx_tareas_calendar_event ON tareas (calendar_event_id)"),
