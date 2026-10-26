@@ -6,6 +6,7 @@ import os
 import asyncio
 import datetime
 import threading
+import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -647,21 +648,28 @@ async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     archivo = await voice.get_file()
-    ruta_audio = "nota_de_voz.ogg"
-    await archivo.download_to_drive(ruta_audio)
-
-    transcripcion = await ai_service.transcribe_audio(ruta_audio)
-    if transcripcion:
-        logger.info("audio_transcribed_ok", length=len(transcripcion))
-        await procesar_peticion(update, context, transcripcion)
-    else:
-        logger.warning("audio_transcription_empty")
-        await update.message.reply_text("❌ No pude transcribir el audio.")
+    # Usar tempfile para ruta writable en Render
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+        ruta_audio = tmp.name
 
     try:
-        os.remove(ruta_audio)
-    except Exception:
-        pass
+        await archivo.download_to_drive(ruta_audio)
+
+        transcripcion = await ai_service.transcribe_audio(ruta_audio)
+        if transcripcion:
+            logger.info("audio_transcribed_ok", length=len(transcripcion))
+            await procesar_peticion(update, context, transcripcion)
+        else:
+            logger.warning("audio_transcription_empty")
+            await update.message.reply_text("❌ No pude transcribir el audio.")
+    except Exception as e:
+        logger.error("audio_processing_failed", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error procesando el audio.")
+    finally:
+        try:
+            os.remove(ruta_audio)
+        except Exception:
+            pass
 
 
 async def callback_completar(update: Update, context: ContextTypes.DEFAULT_TYPE):
