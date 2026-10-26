@@ -67,6 +67,9 @@ class ParsedIntent:
     tags: List[str] = None
     tarea_original_id: Optional[int] = None  # Para REAGENDAR
     confianza: float = 1.0
+    # Campos para objetivos
+    objetivo_valor: Optional[float] = None
+    objetivo_unidad: Optional[str] = None
 
     def __post_init__(self):
         if self.tags is None:
@@ -82,6 +85,8 @@ class ParsedIntent:
             "tags": self.tags,
             "tarea_original_id": self.tarea_original_id,
             "confianza": self.confianza,
+            "objetivo_valor": self.objetivo_valor,
+            "objetivo_unidad": self.objetivo_unidad,
         }
 
 
@@ -386,6 +391,20 @@ class AIService:
             except (ValueError, TypeError):
                 tarea_original_id = None
 
+        # Objetivo valor y unidad (para objetivos)
+        objetivo_valor = result.get("objetivo_valor")
+        if objetivo_valor is not None:
+            try:
+                objetivo_valor = float(objetivo_valor)
+            except (ValueError, TypeError):
+                objetivo_valor = None
+
+        objetivo_unidad = result.get("objetivo_unidad")
+        if objetivo_unidad is not None:
+            objetivo_unidad = str(objetivo_unidad).strip().lower()
+            if not objetivo_unidad:
+                objetivo_unidad = None
+
         # Confianza
         confianza = result.get("confianza", 1.0)
         if not isinstance(confianza, (int, float)):
@@ -400,7 +419,9 @@ class AIService:
             prioridad=prioridad,
             tags=tags,
             tarea_original_id=tarea_original_id,
-            confianza=confianza
+            confianza=confianza,
+            objetivo_valor=objetivo_valor,
+            objetivo_unidad=objetivo_unidad
         )
 
     async def transcribe_audio(self, audio_path: str) -> Optional[str]:
