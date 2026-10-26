@@ -914,9 +914,16 @@ async def post_init(application: Application):
 
     summary_service = SummaryService(task_repo, calendar_service, ai_service)
 
-    # Job diario a las 6:50 AM
+    # Job diario a las 6:50 AM (resumen matutino)
     hora_envio = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
     application.job_queue.run_daily(enviar_resumen_diario, time=hora_envio)
+
+    # Job diario a las 18:00 (recordatorio vespertino)
+    hora_vespertino = datetime.time(hour=18, minute=0, tzinfo=ZONA_HORARIA)
+    application.job_queue.run_daily(
+        lambda ctx: summary_service.send_evening_reminder(ctx.bot, settings.mi_telegram_id),
+        time=hora_vespertino
+    )
 
     logger.info("application_ready", services=["ai", "calendar", "reminder", "summary", "db"])
 

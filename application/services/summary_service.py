@@ -274,3 +274,103 @@ class SummaryService:
 
         except Exception as e:
             logger.error("custom_summary_failed", chat_id=chat_id, error=str(e))
+
+    async def send_evening_reminder(self, bot: Bot, chat_id: str) -> None:
+        """
+        Envía recordatorio vespertino (18:00) con actividades pendientes del día.
+
+        Args:
+            bot: Instancia de Bot de Telegram
+            chat_id: Chat ID del usuario
+        """
+        try:
+            from datetime import datetime, timedelta
+
+            # Calcular fin de día (23:59)
+            hoy = datetime.now(settings.tz).replace(hour=0, minute=0, second=0, microsecond=0)
+            fin_dia = hoy + timedelta(days=1) - timedelta(seconds=1)
+
+            # Obtener tareas diarias pendientes
+            daily_tasks = await self._task_repo.get_daily_tasks(chat_id)
+
+            # Tareas/recordatorios pendientes para hoy
+            pending_tasks = await self._task_repo.get_pending(chat_id)
+            tasks_hoy = [t for t in pending_tasks if t.fecha_hora and t.fecha_hora <= fin_dia]
+
+            # Eventos restantes de hoy
+            calendar_events = await self._calendar_service.get_upcoming_events(max_results=10, time_min=hoy)
+            events_hoy = []
+            for evento in calendar_events:
+                inicio = evento['start'].get('dateTime', evento['start'].get('date'))
+                try:
+                    dt = datetime.fromisoformat(inicio.replace('Z', '+00:00'))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=settings.tz)
+                    if dt <= fin_dia:
+                        events_hoy.append(evento)
+                except Exception:
+                    pass
+
+            # Verificar si hay algo pendiente
+            pending_subtasks_total = sum(len(t.get_pending_subtasks()) for t in daily_tasks)
+            total_pending = pending_subtasks_total + len(tasks_hoy) + len(events_hoy)
+
+            if total_pending == 0:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="🌆 ¡Buenas tardes! ✅ Día completado. No tenés actividades pendientes."
+                )
+                return
+
+            mensaje = "🌆 <b>Recordatorio vespertino (18:00)</b>\n"
+            mensaje += "Actividades pendientes para completar hoy:\n\n"
+
+            # Sub-tareas pendientes de listas diarias
+            if daily_tasks:
+                mensaje += "☑️ <b>Listas diarias:</b>\n"
+                for tarea in daily_tasks:
+                    pending_subs = tarea.get_pending_subtasks()
+                    if pending_subs:
+                        mensaje += f"  ▷ <b>{tarea.detalles}</b>:\n"
+                        for sub in pending_subs:
+                            mensaje += f"    ☐ {sub.texto}\n"
+                        mensaje += "\n"
+
+            # Tareas/recordatorios pendientes para hoy
+            if tasks_hoy:
+                mensaje += "📝 <b>Tareas y recordatorios de hoy:</b>\n"
+                for tarea in tasks_hoy:
+                    fecha_str = f" (<i>{self._format_fecha(tarea.fecha_hora.isoformat())}</i>)" if tarea.fecha_hora else ""
+                    priority = " 🔴" if tarea.prioridad == 1 else " 🟢" if tarea.prioridad == -1 else ""
+                    mensaje += f"  ☐ <b>[{tarea.tipo.value}]</b> {tarea.detalles}{fecha_str}{priority}\n"
+                mensaje += "\n"
+
+            # Eventos restantes de hoy
+            if events_hoy:
+                mensaje += "📅 <b>Eventos de hoy:</b>\n"
+                for evento in events_hoy:
+                    inicio = evento['start'].get('dateTime', evento['start'].get('date'))
+                    fecha_str = self._format_fecha(inicio)
+                    mensaje += f"  ▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>)\n"
+                mensaje += "\n"
+
+            mensaje += "💪 ¡A darle a las pendientes!"
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text=mensaje,
+                parse_mode=ParseMode.HTML
+            )
+
+            logger.info("evening_reminder_sent", chat_id=chat_id,
+                       daily_tasks=len(daily_tasks), tasks=len(tasks_hoy), events=len(events_hoy))
+
+        except Exception as e:
+            logger.error("evening_reminder_failed", chat_id=chat_id, error=str(e), exc_info=True)
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="⚠️ Hubo un error generando el recordatorio vespertino."
+                )
+            except Exception:
+                pass
