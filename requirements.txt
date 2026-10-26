@@ -13,6 +13,7 @@ google-auth-oauthlib>=1.2.0
 python-dotenv>=1.2.4
 pydantic-settings>=2.3.0
 pydantic>=2.7.0
+psycopg2-binary
 
 # Base de datos asíncrona
 asyncpg>=0.29.0
