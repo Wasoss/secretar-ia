@@ -1321,6 +1321,14 @@ async def post_init(application: Application):
         days=(6,)  # Domingo = 6 (0=Lunes, 6=Domingo)
     )
 
+    # Keep-alive: cada 5 min hace query simple para evitar spin-down en Render free tier
+    application.job_queue.run_repeating(
+        lambda ctx: pool.fetchval("SELECT 1"),
+        interval=300,  # 5 minutos
+        first=10,
+        name="keep_alive_db"
+    )
+
     logger.info("application_ready", services=["ai", "calendar", "reminder", "summary", "weekly_planning", "db"])
 
 
