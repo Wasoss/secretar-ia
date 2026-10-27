@@ -621,7 +621,7 @@ async def handle_listar_plantillas(update: Update, chat_id: str):
             items_preview = ", ".join([item.get("texto", "")[:30] for item in p.items[:3]])
             if len(p.items) > 3:
                 items_preview += f" ... y {len(p.items) - 3} más"
-            mensaje = f"▷ <b>{p.nombre}</b>{activa}\n  {items_preview}\n"
+            mensaje += f"▷ <b>{p.nombre}</b>{activa}\n  {items_preview}\n"
 
         await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
     except Exception as e:
@@ -1278,10 +1278,10 @@ def main():
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("tag", filtrar_tag))
     app.add_handler(CommandHandler("pendientes", ver_pendientes))
-    # /plantillas y /planillas (alias común sin 't')
-    app.add_handler(CommandHandler(["plantillas", "planillas"], ver_plantillas))
-    # /objetivos y /metas (alias sinónimo)
-    app.add_handler(CommandHandler(["objetivos", "metas"], ver_objetivos))
+    # /plantillas, /planillas, /planilla (singular y plural)
+    app.add_handler(CommandHandler(["plantillas", "planillas", "planilla"], ver_plantillas))
+    # /objetivos, /metas, /meta (singular y plural)
+    app.add_handler(CommandHandler(["objetivos", "metas", "meta"], ver_objetivos))
     app.add_handler(CommandHandler("revision", ver_revision))
     app.add_handler(CommandHandler("resumen", lambda u, c: summary_service.send_daily_summary(c.bot, settings.mi_telegram_id)))
 

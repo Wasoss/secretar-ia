@@ -148,7 +148,8 @@ async def init_db() -> None:
                 semana_inicio DATE NOT NULL,  -- Lunes de la semana (YYYY-MM-DD)
                 valor_actual NUMERIC NOT NULL DEFAULT 0,
                 creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (telefono_id, semana_inicio, descripcion)
             )
         """)
         await conn.execute("""
@@ -223,6 +224,25 @@ async def _run_migrations(pool: asyncpg.Pool) -> None:
                 logger.debug("migration_unique_constraint_exists", table="plantillas_diarias")
         except Exception as e:
             logger.warning("migration_unique_constraint_failed", table="plantillas_diarias", error=str(e))
+
+        # Agregar unique constraint a objetivos_semanales si no existe
+        try:
+            exists = await conn.fetchval("""
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'uq_objetivos_telefono_semana_descripcion'
+                AND conrelid = 'objetivos_semanales'::regclass
+            """)
+            if not exists:
+                await conn.execute("""
+                    ALTER TABLE objetivos_semanales
+                    ADD CONSTRAINT uq_objetivos_telefono_semana_descripcion
+                    UNIQUE (telefono_id, semana_inicio, descripcion)
+                """)
+                logger.debug("migration_unique_constraint_added", table="objetivos_semanales")
+            else:
+                logger.debug("migration_unique_constraint_exists", table="objetivos_semanales")
+        except Exception as e:
+            logger.warning("migration_unique_constraint_failed", table="objetivos_semanales", error=str(e))
 
         # Re-crear índices si no existen (idempotente) - estos se crean también en init_db
         indexes = [
