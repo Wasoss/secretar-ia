@@ -576,177 +576,257 @@ async def handle_guardar_tarea_diaria(update: Update, context: ContextTypes.DEFA
 async def handle_crear_plantilla(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                   chat_id: str, intent: ParsedIntent):
     """Crea una plantilla diaria reutilizable desde texto libre."""
-    plantilla_id = await weekly_planning_service.create_plantilla_from_text(
-        telefono_id=chat_id,
-        texto=intent.detalles,
-        nombre=intent.tags[0] if intent.tags else None,
-    )
-    await update.message.reply_text(
-        f"📋 <b>Plantilla creada</b> (ID: {plantilla_id})\n"
-        f"📝 Items: {intent.detalles}\n"
-        f"✅ Ahora se aplicará cada mañana a las 6:30 AM",
-        parse_mode=ParseMode.HTML
-    )
+    try:
+        if weekly_planning_service is None or plantilla_repo is None:
+            logger.error("handle_crear_plantilla: services not initialized")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        plantilla_id = await weekly_planning_service.create_plantilla_from_text(
+            telefono_id=chat_id,
+            texto=intent.detalles,
+            nombre=intent.tags[0] if intent.tags else None,
+        )
+        await update.message.reply_text(
+            f"📋 <b>Plantilla creada</b> (ID: {plantilla_id})\n"
+            f"📝 Items: {intent.detalles}\n"
+            f"✅ Ahora se aplicará cada mañana a las 6:30 AM",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.error("handle_crear_plantilla_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al crear plantilla. Reintentá en unos segundos.")
 
 async def handle_listar_plantillas(update: Update, chat_id: str):
     """Lista todas las plantillas del usuario."""
-    plantillas = await plantilla_repo.get_all(chat_id)
+    try:
+        if plantilla_repo is None:
+            logger.error("handle_listar_plantillas: plantilla_repo is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        plantillas = await plantilla_repo.get_all(chat_id)
 
-    if not plantillas:
-        await update.message.reply_text(
-            "📋 No tenés plantillas guardadas.\n"
-            "Crea una diciendo: <i>\"Plantilla: cada día estudiar 2h, ejercicio\"</i>",
-            parse_mode=ParseMode.HTML
-        )
-        return
+        if not plantillas:
+            await update.message.reply_text(
+                "📋 No tenés plantillas guardadas.\n"
+                "Crea una diciendo: <i>\"Plantilla: cada día estudiar 2h, ejercicio\"</i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
-    mensaje = "📋 <b>Tus plantillas:</b>\n\n"
-    for p in plantillas:
-        activa = " ✅ <b>ACTIVA</b>" if p.activa else ""
-        items_preview = ", ".join([item.get("texto", "")[:30] for item in p.items[:3]])
-        if len(p.items) > 3:
-            items_preview += f" ... y {len(p.items) - 3} más"
-        mensaje = f"▷ <b>{p.nombre}</b>{activa}\n  {items_preview}\n"
+        mensaje = "📋 <b>Tus plantillas:</b>\n\n"
+        for p in plantillas:
+            activa = " ✅ <b>ACTIVA</b>" if p.activa else ""
+            items_preview = ", ".join([item.get("texto", "")[:30] for item in p.items[:3]])
+            if len(p.items) > 3:
+                items_preview += f" ... y {len(p.items) - 3} más"
+            mensaje = f"▷ <b>{p.nombre}</b>{activa}\n  {items_preview}\n"
 
-    await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error("handle_listar_plantillas_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al obtener plantillas. Reintentá en unos segundos.")
 
 async def handle_activar_plantilla(update: Update, chat_id: str, intent: ParsedIntent):
     """Activa una plantilla por nombre."""
-    nombre = intent.detalles.strip()
-    plantillas = await plantilla_repo.get_all(chat_id)
+    try:
+        if plantilla_repo is None:
+            logger.error("handle_activar_plantilla: plantilla_repo is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        nombre = intent.detalles.strip()
+        plantillas = await plantilla_repo.get_all(chat_id)
 
-    # Buscar por nombre (parcial, case-insensitive)
-    plantilla = None
-    for p in plantillas:
-        if nombre.lower() in p.nombre.lower():
-            plantilla = p
-            break
+        # Buscar por nombre (parcial, case-insensitive)
+        plantilla = None
+        for p in plantillas:
+            if nombre.lower() in p.nombre.lower():
+                plantilla = p
+                break
 
-    if not plantilla:
-        await update.message.reply_text(f"❌ No encontré plantilla: \"{nombre}\". Usá /plantillas para verlas.")
-        return
+        if not plantilla:
+            await update.message.reply_text(f"❌ No encontré plantilla: \"{nombre}\". Usá /plantillas para verlas.")
+            return
 
-    await plantilla_repo.set_active(chat_id, plantilla.id)
-    await update.message.reply_text(
-        f"✅ Plantilla activada: <b>{plantilla.nombre}</b>\n"
-        f"Se aplicará mañana a las 6:30 AM",
-        parse_mode=ParseMode.HTML
-    )
+        await plantilla_repo.set_active(chat_id, plantilla.id)
+        await update.message.reply_text(
+            f"✅ Plantilla activada: <b>{plantilla.nombre}</b>\n"
+            f"Se aplicará mañana a las 6:30 AM",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.error("handle_activar_plantilla_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al activar plantilla. Reintentá en unos segundos.")
 
 async def handle_crear_objetivo(update: Update, chat_id: str, intent: ParsedIntent):
     """Crea un objetivo semanal."""
-    # Parsear valor y unidad de la descripción
-    # Ej: "estudiar 10h/semana" -> valor=10, unidad="horas"
-    import re
-    texto = intent.detalles
+    try:
+        if weekly_planning_service is None or objetivo_repo is None:
+            logger.error("handle_crear_objetivo: services not initialized")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        # Parsear valor y unidad de la descripción
+        # Ej: "estudiar 10h/semana" -> valor=10, unidad="horas"
+        import re
+        texto = intent.detalles
 
-    # Intentar extraer valor y unidad
-    match = re.search(r'(\d+(?:\.\d+)?)\s*(h|hrs?|horas?|veces?|libros?|km|paginas?|minutos?)', texto, re.IGNORECASE)
-    if match:
-        valor = float(match.group(1))
-        unidad = match.group(2).lower()
-    else:
-        # Default si no se especifica
-        valor = 1
-        unidad = "veces"
+        # Intentar extraer valor y unidad
+        match = re.search(r'(\d+(?:\.\d+)?)\s*(h|hrs?|horas?|veces?|libros?|km|paginas?|minutos?)', texto, re.IGNORECASE)
+        if match:
+            valor = float(match.group(1))
+            unidad = match.group(2).lower()
+        else:
+            # Default si no se especifica
+            valor = 1
+            unidad = "veces"
 
-    objetivo_id = await weekly_planning_service.create_objetivo(
-        telefono_id=chat_id,
-        descripcion=intent.detalles,
-        objetivo_valor=valor,
-        objetivo_unidad=match.group(2) if match else "veces",
-    )
+        objetivo_id = await weekly_planning_service.create_objetivo(
+            telefono_id=chat_id,
+            descripcion=intent.detalles,
+            objetivo_valor=valor,
+            objetivo_unidad=match.group(2) if match else "veces",
+        )
 
-    await update.message.reply_text(
-        f"🎯 <b>Objetivo creado</b> (ID: {objetivo_id})\n"
-        f"📝 {intent.detalles}\n"
-        f"📊 Meta: {valor} {match.group(2) if match else 'veces'}/semana\n"
-        f"📅 Para la semana actual",
-        parse_mode=ParseMode.HTML
-    )
+        await update.message.reply_text(
+            f"🎯 <b>Objetivo creado</b> (ID: {objetivo_id})\n"
+            f"📝 {intent.detalles}\n"
+            f"📊 Meta: {valor} {match.group(2) if match else 'veces'}/semana\n"
+            f"📅 Para la semana actual",
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.error("handle_crear_objetivo_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al crear objetivo. Reintentá en unos segundos.")
 
 async def handle_listar_objetivos(update: Update, chat_id: str):
     """Lista objetivos de la semana actual."""
-    objetivos = await objetivo_repo.get_active(chat_id)
+    try:
+        if objetivo_repo is None:
+            logger.error("handle_listar_objetivos: objetivo_repo is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        objetivos = await objetivo_repo.get_active(chat_id)
 
-    if not objetivos:
-        await update.message.reply_text(
-            "🎯 No tenés objetivos para esta semana.\n"
-            "Crea uno: <i>\"Meta: estudiar 10h/semana\"</i>",
-            parse_mode=ParseMode.HTML
-        )
-        return
+        if not objetivos:
+            await update.message.reply_text(
+                "🎯 No tenés objetivos para esta semana.\n"
+                "Crea uno: <i>\"Meta: estudiar 10h/semana\"</i>",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
-    mensaje = "🎯 <b>Objetivos de esta semana:</b>\n\n"
-    for obj in objetivos:
-        emoji = obj.estado_emoji()
-        mensaje += f"{emoji} <b>{obj.descripcion}</b>\n"
-        mensaje += f"   Progreso: {obj.formatear_progreso()} ({obj.porcentaje:.1f}%)\n\n"
+        mensaje = "🎯 <b>Objetivos de esta semana:</b>\n\n"
+        for obj in objetivos:
+            emoji = obj.estado_emoji()
+            mensaje += f"{emoji} <b>{obj.descripcion}</b>\n"
+            mensaje += f"   Progreso: {obj.formatear_progreso()} ({obj.porcentaje:.1f}%)\n\n"
 
-    await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(mensaje, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error("handle_listar_objetivos_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al obtener objetivos. Reintentá en unos segundos.")
 
 async def handle_progreso_objetivo(update: Update, chat_id: str, intent: ParsedIntent):
     """Actualiza progreso de un objetivo."""
-    # Buscar objetivo por descripción
-    objetivos = await objetivo_repo.get_active(chat_id)
+    try:
+        if objetivo_repo is None:
+            logger.error("handle_progreso_objetivo: objetivo_repo is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        # Buscar objetivo por descripción
+        objetivos = await objetivo_repo.get_active(chat_id)
 
-    obj = None
-    for o in objetivos:
-        if intent.detalles.lower() in o.descripcion.lower() or o.descripcion.lower() in intent.detalles.lower():
-            obj = o
-            break
+        obj = None
+        for o in objetivos:
+            if intent.detalles.lower() in o.descripcion.lower() or o.descripcion.lower() in intent.detalles.lower():
+                obj = o
+                break
 
-    if not obj:
-        await update.message.reply_text("❌ No encontré ese objetivo. Usá /objetivos para verlos.")
-        return
+        if not obj:
+            await update.message.reply_text("❌ No encontré ese objetivo. Usá /objetivos para verlos.")
+            return
 
-    # Extraer valor del progreso
-    import re
-    match = re.search(r'(\d+(?:\.\d+)?)', intent.detalles)
-    if not match:
-        await update.message.reply_text("❌ No pude identificar el progreso. Probá: \"Avancé 2h en estudio\"")
-        return
+        # Extraer valor del progreso
+        import re
+        match = re.search(r'(\d+(?:\.\d+)?)', intent.detalles)
+        if not match:
+            await update.message.reply_text("❌ No pude identificar el progreso. Probá: \"Avancé 2h en estudio\"")
+            return
 
-    incremento = float(match.group(1))
-    await objetivo_repo.update_progress(obj.id, incremento)
+        incremento = float(match.group(1))
+        await objetivo_repo.update_progress(obj.id, incremento)
 
-    # Obtener objetivo actualizado
-    obj_actualizado = await objetivo_repo.get_by_id(obj.id)
+        # Obtener objetivo actualizado
+        obj_actualizado = await objetivo_repo.get_by_id(obj.id)
 
-    await update.message.reply_text(
-        f"📈 <b>Progreso actualizado</b>\n"
-        f"📝 {obj_actualizado.descripcion}\n"
-        f"📊 Progreso: {obj_actualizado.formatear_progreso()} ({obj_actualizado.porcentaje:.1f}%)\n"
-        + ("✅ ¡Objetivo completado!" if obj_actualizado.completado else ""),
-        parse_mode=ParseMode.HTML
-    )
+        await update.message.reply_text(
+            f"📈 <b>Progreso actualizado</b>\n"
+            f"📝 {obj_actualizado.descripcion}\n"
+            f"📊 Progreso: {obj_actualizado.formatear_progreso()} ({obj_actualizado.porcentaje:.1f}%)\n"
+            + ("✅ ¡Objetivo completado!" if obj_actualizado.completado else ""),
+            parse_mode=ParseMode.HTML
+        )
+    except Exception as e:
+        logger.error("handle_progreso_objetivo_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al actualizar progreso. Reintentá en unos segundos.")
 
 async def handle_revision_semanal(update: Update, chat_id: str):
     """Genera y envía revisión semanal."""
-    await weekly_planning_service.send_weekly_review(
-        bot=update._bot,
-        chat_id=chat_id
-    )
+    try:
+        if weekly_planning_service is None:
+            logger.error("handle_revision_semanal: weekly_planning_service is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        await weekly_planning_service.send_weekly_review(
+            bot=update._bot,
+            chat_id=chat_id
+        )
+    except Exception as e:
+        logger.error("handle_revision_semanal_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al generar revisión. Reintentá en unos segundos.")
 
 
 # Commands handlers
 async def ver_plantillas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /plantillas - Ver/gestionar plantillas."""
-    if not await verificar_usuario(update):
-        return
-    await handle_listar_plantillas(update, chat_id=str(update.message.chat_id))
+    try:
+        if not await verificar_usuario(update):
+            return
+        if plantilla_repo is None:
+            logger.error("ver_plantillas: plantilla_repo is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        await handle_listar_plantillas(update, chat_id=str(update.message.chat_id))
+    except Exception as e:
+        logger.error("ver_plantillas_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al obtener plantillas. Reintentá en unos segundos.")
 
 async def ver_objetivos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /objetivos - Ver/crear objetivos semanales."""
-    if not await verificar_usuario(update):
-        return
-    await handle_listar_objetivos(update, chat_id=str(update.message.chat_id))
+    try:
+        if not await verificar_usuario(update):
+            return
+        if objetivo_repo is None:
+            logger.error("ver_objetivos: objetivo_repo is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        await handle_listar_objetivos(update, chat_id=str(update.message.chat_id))
+    except Exception as e:
+        logger.error("ver_objetivos_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al obtener objetivos. Reintentá en unos segundos.")
 
 async def ver_revision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /revision - Disparar revisión semanal manual."""
-    if not await verificar_usuario(update):
-        return
-    await handle_revision_semanal(update, chat_id=str(update.message.chat_id))
+    try:
+        if not await verificar_usuario(update):
+            return
+        if weekly_planning_service is None:
+            logger.error("ver_revision: weekly_planning_service is None")
+            await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
+            return
+        await handle_revision_semanal(update, chat_id=str(update.message.chat_id))
+    except Exception as e:
+        logger.error("ver_revision_error", error=str(e), exc_info=True)
+        await update.message.reply_text("❌ Error al generar revisión. Reintentá en unos segundos.")
     """Construye mensaje de confirmación bonito."""
     icons = {
         ActionType.EVENTO: "📅",
