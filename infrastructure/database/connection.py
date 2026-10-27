@@ -128,7 +128,8 @@ async def init_db() -> None:
                 items_json JSONB NOT NULL,  -- Array de {texto, orden}
                 activa BOOLEAN NOT NULL DEFAULT TRUE,
                 creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (telefono_id, nombre)
             )
         """)
         await conn.execute("""
@@ -201,6 +202,19 @@ async def _run_migrations(pool: asyncpg.Pool) -> None:
                 ALTER TABLE credenciales
                 ADD COLUMN IF NOT EXISTS actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
             """)
+        except Exception as e:
+            logger.warning("migration_credenciales_failed", error=str(e))
+
+        # Agregar unique constraint a plantillas_diarias si no existe
+        try:
+            await conn.execute("""
+                ALTER TABLE plantillas_diarias
+                ADD CONSTRAINT IF NOT EXISTS uq_plantillas_telefono_nombre
+                UNIQUE (telefono_id, nombre)
+            """)
+            logger.debug("migration_unique_constraint_added", table="plantillas_diarias")
+        except Exception as e:
+            logger.warning("migration_unique_constraint_failed", table="plantillas_diarias", error=str(e))
         except Exception as e:
             logger.warning("migration_credenciales_failed", error=str(e))
 
