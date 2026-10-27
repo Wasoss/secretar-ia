@@ -205,18 +205,24 @@ async def _run_migrations(pool: asyncpg.Pool) -> None:
         except Exception as e:
             logger.warning("migration_credenciales_failed", error=str(e))
 
-        # Agregar unique constraint a plantillas_diarias si no existe
+        # Agregar unique constraint a plantillas_diarias si no existe (PostgreSQL no soporta IF NOT EXISTS en ADD CONSTRAINT)
         try:
-            await conn.execute("""
-                ALTER TABLE plantillas_diarias
-                ADD CONSTRAINT IF NOT EXISTS uq_plantillas_telefono_nombre
-                UNIQUE (telefono_id, nombre)
+            exists = await conn.fetchval("""
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'uq_plantillas_telefono_nombre'
+                AND conrelid = 'plantillas_diarias'::regclass
             """)
-            logger.debug("migration_unique_constraint_added", table="plantillas_diarias")
+            if not exists:
+                await conn.execute("""
+                    ALTER TABLE plantillas_diarias
+                    ADD CONSTRAINT uq_plantillas_telefono_nombre
+                    UNIQUE (telefono_id, nombre)
+                """)
+                logger.debug("migration_unique_constraint_added", table="plantillas_diarias")
+            else:
+                logger.debug("migration_unique_constraint_exists", table="plantillas_diarias")
         except Exception as e:
             logger.warning("migration_unique_constraint_failed", table="plantillas_diarias", error=str(e))
-        except Exception as e:
-            logger.warning("migration_credenciales_failed", error=str(e))
 
         # Re-crear índices si no existen (idempotente) - estos se crean también en init_db
         indexes = [
