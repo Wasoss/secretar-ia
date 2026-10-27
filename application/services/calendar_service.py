@@ -172,10 +172,11 @@ class CalendarService:
 
         except HttpError as e:
             logger.error("calendar_api_error", error=str(e), status=e.resp.status)
-            return None
+            # Re-lanzar para que el handler muestre el error real
+            raise RuntimeError(f"Calendar API error {e.resp.status}: {e.error_details or str(e)}") from e
         except Exception as e:
             logger.error("calendar_event_creation_failed", error=str(e), exc_info=True)
-            return None
+            raise RuntimeError(f"Error creando evento: {e}") from e
 
     async def get_upcoming_events(self, max_results: int = 10, time_min: Optional[datetime.datetime] = None) -> List[dict]:
         """
