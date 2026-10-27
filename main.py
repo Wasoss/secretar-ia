@@ -581,10 +581,12 @@ async def handle_crear_plantilla(update: Update, context: ContextTypes.DEFAULT_T
             logger.error("handle_crear_plantilla: services not initialized")
             await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
             return
+        # Usar primer tag como nombre, o generar uno automático
+        nombre = intent.tags[0] if intent.tags else None
         plantilla_id = await weekly_planning_service.create_plantilla_from_text(
             telefono_id=chat_id,
             texto=intent.detalles,
-            nombre=intent.tags[0] if intent.tags else None,
+            nombre=nombre,
         )
         await update.message.reply_text(
             f"📋 <b>Plantilla creada</b> (ID: {plantilla_id})\n"
@@ -664,32 +666,34 @@ async def handle_crear_objetivo(update: Update, chat_id: str, intent: ParsedInte
             logger.error("handle_crear_objetivo: services not initialized")
             await update.message.reply_text("❌ Servicio no disponible. Reintentá en unos segundos.")
             return
-        # Parsear valor y unidad de la descripción
-        # Ej: "estudiar 10h/semana" -> valor=10, unidad="horas"
-        import re
-        texto = intent.detalles
 
-        # Intentar extraer valor y unidad
-        match = re.search(r'(\d+(?:\.\d+)?)\s*(h|hrs?|horas?|veces?|libros?|km|paginas?|minutos?)', texto, re.IGNORECASE)
-        if match:
-            valor = float(match.group(1))
-            unidad = match.group(2).lower()
+        # Usar valores parseados por la IA si vienen, si no parsear del texto
+        if intent.objetivo_valor is not None and intent.objetivo_unidad:
+            valor = intent.objetivo_valor
+            unidad = intent.objetivo_unidad
         else:
-            # Default si no se especifica
-            valor = 1
-            unidad = "veces"
+            # Fallback: parsear del texto
+            import re
+            texto = intent.detalles
+            match = re.search(r'(\d+(?:\.\d+)?)\s*(h|hrs?|horas?|veces?|libros?|km|paginas?|minutos?)', texto, re.IGNORECASE)
+            if match:
+                valor = float(match.group(1))
+                unidad = match.group(2).lower()
+            else:
+                valor = 1
+                unidad = "veces"
 
         objetivo_id = await weekly_planning_service.create_objetivo(
             telefono_id=chat_id,
             descripcion=intent.detalles,
             objetivo_valor=valor,
-            objetivo_unidad=match.group(2) if match else "veces",
+            objetivo_unidad=unidad,
         )
 
         await update.message.reply_text(
             f"🎯 <b>Objetivo creado</b> (ID: {objetivo_id})\n"
             f"📝 {intent.detalles}\n"
-            f"📊 Meta: {valor} {match.group(2) if match else 'veces'}/semana\n"
+            f"📊 Meta: {valor} {unidad}/semana\n"
             f"📅 Para la semana actual",
             parse_mode=ParseMode.HTML
         )
@@ -745,14 +749,17 @@ async def handle_progreso_objetivo(update: Update, chat_id: str, intent: ParsedI
             await update.message.reply_text("❌ No encontré ese objetivo. Usá /objetivos para verlos.")
             return
 
-        # Extraer valor del progreso
-        import re
-        match = re.search(r'(\d+(?:\.\d+)?)', intent.detalles)
-        if not match:
-            await update.message.reply_text("❌ No pude identificar el progreso. Probá: \"Avancé 2h en estudio\"")
-            return
+        # Usar valor parseado por la IA si viene, si no parsear del texto
+        if intent.objetivo_valor is not None:
+            incremento = intent.objetivo_valor
+        else:
+            import re
+            match = re.search(r'(\d+(?:\.\d+)?)', intent.detalles)
+            if not match:
+                await update.message.reply_text("❌ No pude identificar el progreso. Probá: \"Avancé 2h en estudio\"")
+                return
+            incremento = float(match.group(1))
 
-        incremento = float(match.group(1))
         await objetivo_repo.update_progress(obj.id, incremento)
 
         # Obtener objetivo actualizado
@@ -1268,8 +1275,10 @@ def main():
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("tag", filtrar_tag))
     app.add_handler(CommandHandler("pendientes", ver_pendientes))
-    app.add_handler(CommandHandler("plantillas", ver_plantillas))
-    app.add_handler(CommandHandler("objetivos", ver_objetivos))
+    # /plantillas y /planillas (alias común sin 't')
+    app.add_handler(CommandHandler(["plantillas", "planillas"], ver_plantillas))
+    # /objetivos y /metas (alias sinónimo)
+    app.add_handler(CommandHandler(["objetivos", "metas"], ver_objetivos))
     app.add_handler(CommandHandler("revision", ver_revision))
     app.add_handler(CommandHandler("resumen", lambda u, c: summary_service.send_daily_summary(c.bot, settings.mi_telegram_id)))
 
