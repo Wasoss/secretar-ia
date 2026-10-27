@@ -1277,7 +1277,7 @@ def main():
     app.add_handler(CommandHandler("semana", ver_semana))
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("tag", filtrar_tag))
-    app.add_handler(CommandHandler("pendientes", ver_pendientes))
+    app.add_handler(CommandHandler(["pendientes", "tareas"], ver_pendientes))
     # /plantillas, /planillas, /planilla (singular y plural)
     app.add_handler(CommandHandler(["plantillas", "planillas", "planilla"], ver_plantillas))
     # /objetivos, /metas, /meta (singular y plural)
