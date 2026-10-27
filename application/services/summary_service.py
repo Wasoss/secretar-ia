@@ -140,7 +140,8 @@ class SummaryService:
                 mensaje += "\n"
 
             # Cierre conciso
-            if events_hoy or tasks_hoy := [t for t in pending_tasks if t.fecha_hora and t.fecha_hora < manana]:
+            tasks_hoy = [t for t in pending_tasks if t.fecha_hora and t.fecha_hora < manana]
+            if events_hoy or tasks_hoy:
                 mensaje += "—\nOrganice su jornada según prioridad."
 
             if botones:
