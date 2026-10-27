@@ -36,7 +36,7 @@ class SummaryService:
     async def send_daily_summary(self, bot: Bot, chat_id: str) -> None:
         """
         Envía el resumen diario al usuario con sugerencia proactiva.
-        Muestra eventos de HOY y MAÑANA, tareas pendientes y tareas diarias.
+        Muestra eventos de HOY y MAÑANA, tareas pendientes separadas por tipo, y tareas diarias.
 
         Args:
             bot: Instancia de Bot de Telegram
@@ -80,55 +80,64 @@ class SummaryService:
                 )
                 return
 
-            mensaje = "¡Buen día! ☀️ Acá tenés tu resumen:\n\n"
+            mensaje = "¡Buen día! ☀️ <b>Resumen del día</b>\n\n"
 
-            # Eventos de HOY
+            # ===== EVENTOS HOY =====
             if events_hoy:
                 mensaje += "📅 <b>Eventos de HOY:</b>\n"
                 for evento in events_hoy:
                     inicio = evento['start'].get('dateTime', evento['start'].get('date'))
                     fecha_str = self._format_fecha(inicio)
                     rec_indicator = " 🔄" if evento.get('recurrence') else ""
-                    mensaje += f"▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>){rec_indicator}\n"
+                    mensaje += f"  ▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>){rec_indicator}\n"
                 mensaje += "\n"
 
-            # Eventos de MAÑANA
+            # ===== EVENTOS MAÑANA =====
             if events_manana:
                 mensaje += "📅 <b>Eventos de MAÑANA:</b>\n"
                 for evento in events_manana:
                     inicio = evento['start'].get('dateTime', evento['start'].get('date'))
                     fecha_str = self._format_fecha(inicio)
                     rec_indicator = " 🔄" if evento.get('recurrence') else ""
-                    mensaje += f"▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>){rec_indicator}\n"
+                    mensaje += f"  ▷ {evento.get('summary', 'Sin título')} (<i>{fecha_str}</i>){rec_indicator}\n"
                 mensaje += "\n"
 
-            # Tareas y notas pendientes
+            # ===== TAREAS PENDIENTES - Separadas por tipo =====
             if pending_tasks:
-                mensaje += "📝 <b>Tareas y Notas pendientes:</b>\n"
+                # Agrupar por tipo
+                from collections import defaultdict
+                tareas_por_tipo = defaultdict(list)
+                for t in pending_tasks:
+                    tareas_por_tipo[t.tipo].append(t)
+
                 botones = []
-                for tarea in pending_tasks:
-                    # Indicadores visuales
-                    priority_indicator = " 🔴" if tarea.prioridad == 1 else " 🟢" if tarea.prioridad == -1 else ""
-                    rec_indicator = " 🔄" if tarea.recurrencia else ""
-                    tag_str = f" #{' #'.join(tarea.tags)}" if tarea.tags else ""
+                iconos = {
+                    'EVENTO': '📅',
+                    'RECORDATORIO': '⏰',
+                    'NOTA': '📔',
+                }
 
-                    fecha_str = f" (<i>{self._format_fecha(tarea.fecha_hora.isoformat())}</i>)" if tarea.fecha_hora else ""
-                    mensaje += f"○ <b>[{tarea.tipo.value}]</b> {tarea.detalles}{fecha_str}{priority_indicator}{rec_indicator}{tag_str}\n"
+                for tipo, tareas in tareas_por_tipo.items():
+                    icono = iconos.get(tipo.value, '📝')
+                    mensaje += f"{icono} <b>{tipo.value}s pendientes:</b>\n"
+                    for tarea in tareas:
+                        priority_indicator = " 🔴" if tarea.prioridad == 1 else " 🟢" if tarea.prioridad == -1 else ""
+                        rec_indicator = " 🔄" if tarea.recurrencia else ""
+                        tag_str = f" #{' #'.join(tarea.tags)}" if tarea.tags else ""
+                        fecha_str = f" (<i>{self._format_fecha(tarea.fecha_hora.isoformat())}</i>)" if tarea.fecha_hora else ""
+                        mensaje += f"  ☐ {tarea.detalles}{fecha_str}{priority_indicator}{rec_indicator}{tag_str}\n"
 
-                    # Botón para completar (usar prefijo único)
-                    botones.append([
-                        InlineKeyboardButton(
-                            f"✅ {tarea.detalles[:30]}",
-                            callback_data=f"complete_{tarea.id}"
-                        )
-                    ])
-
-            # Tareas diarias (TAREA_DIARIA) con sub-items
-            if daily_tasks:
-                if pending_tasks:
+                        botones.append([
+                            InlineKeyboardButton(
+                                f"✅ {tarea.detalles[:30]}",
+                                callback_data=f"complete_{tarea.id}"
+                            )
+                        ])
                     mensaje += "\n"
-                mensaje += "☑️ <b>Tareas diarias de hoy:</b>\n"
-                botones = []
+
+            # ===== TAREAS DIARIAS (TAREA_DIARIA) - con sub-items =====
+            if daily_tasks:
+                mensaje += "☑️ <b>Listas de hoy:</b>\n"
                 for tarea in daily_tasks:
                     pending_subs = tarea.get_pending_subtasks()
                     completed_subs = tarea.get_completed_subtasks()
@@ -139,9 +148,9 @@ class SummaryService:
                     else:
                         progress = ""
 
-                    mensaje += f"▷ <b>{tarea.detalles}</b>{progress}\n"
+                    mensaje += f"  ▷ <b>{tarea.detalles}</b>{progress}\n"
 
-                    # Sub-items pendientes con botones para marcar
+                    # Sub-items PENDIENTES con botones
                     for sub in pending_subs:
                         botones.append([
                             InlineKeyboardButton(
@@ -149,25 +158,19 @@ class SummaryService:
                                 callback_data=f"subtask_{tarea.id}_{sub.id}"
                             )
                         ])
-                    # Sub-items completados (mostrar tachados)
+                    # Sub-items COMPLETADOS - mostrar tachados
                     for sub in completed_subs:
-                        mensaje += f"  ~~{sub.texto}~~ ✅\n"
+                        mensaje += f"    ~~{sub.texto}~~ ✅\n"
+                mensaje += "\n"
 
-            if pending_tasks or daily_tasks:
-                if botones:
-                    teclado = InlineKeyboardMarkup(botones)
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=mensaje,
-                        reply_markup=teclado,
-                        parse_mode=ParseMode.HTML
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=chat_id,
-                        text=mensaje,
-                        parse_mode=ParseMode.HTML
-                    )
+            if botones:
+                teclado = InlineKeyboardMarkup(botones)
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=mensaje,
+                    reply_markup=teclado,
+                    parse_mode=ParseMode.HTML
+                )
             else:
                 await bot.send_message(
                     chat_id=chat_id,
@@ -184,7 +187,6 @@ class SummaryService:
 
         except Exception as e:
             logger.error("daily_summary_failed", chat_id=chat_id, error=str(e), exc_info=True)
-            # Intentar notificar al usuario
             try:
                 await bot.send_message(
                     chat_id=chat_id,

@@ -443,38 +443,9 @@ async def handle_guardar_tarea(update: Update, context: ContextTypes.DEFAULT_TYP
                                chat_id: str, intent: ParsedIntent):
     """Guarda EVENTO, RECORDATORIO o NOTA en BD y Calendar si aplica."""
     calendar_event_id = None
+    calendar_warning = ""
 
-    # Si es EVENTO, crear en Google Calendar
-    if intent.accion == ActionType.EVENTO and intent.fecha_hora:
-        start_dt = intent.fecha_hora
-        end_dt = start_dt + datetime.timedelta(hours=1)
-
-        # Verificar conflictos
-        conflicts = await calendar_service.check_conflicts(start_dt, end_dt)
-        if conflicts:
-            conflict_names = [c.get('summary', 'Sin título') for c in conflicts[:3]]
-            await update.message.reply_text(
-                f"⚠️ <b>Conflicto detectado</b>: Tenés otros eventos en ese horario:\n"
-                f"{', '.join(conflict_names)}\n\n¿Querés que lo agende igual?",
-                parse_mode=ParseMode.HTML
-            )
-            # Podríamos guardar como pendiente de confirmación, por ahora no guardamos
-            return
-
-        created_event = await calendar_service.create_event(
-            summary=intent.detalles,
-            start_dt=start_dt,
-            end_dt=end_dt,
-            recurrence=intent.recurrencia,
-        )
-        if created_event:
-            calendar_event_id = created_event.get('id')
-            logger.info("calendar_event_synced", local_action="EVENTO",
-                       calendar_event_id=calendar_event_id)
-        else:
-            await update.message.reply_text("⚠️ Se guardó localmente pero falló la sincronización con Calendar.")
-
-    # Guardar en BD
+    # Guardar SIEMPRE en BD primero (garantiza persistencia local)
     task_id = await task_repo.save(
         telefono_id=chat_id,
         tipo=TaskType(intent.accion.value),
@@ -483,11 +454,44 @@ async def handle_guardar_tarea(update: Update, context: ContextTypes.DEFAULT_TYP
         recurrencia=intent.recurrencia,
         prioridad=intent.prioridad,
         tags=intent.tags,
-        calendar_event_id=calendar_event_id,
+        calendar_event_id=None,  # Se actualiza después si sincroniza
     )
+
+    # Si es EVENTO, intentar sincronizar con Google Calendar
+    if intent.accion == ActionType.EVENTO and intent.fecha_hora:
+        start_dt = intent.fecha_hora
+        end_dt = start_dt + datetime.timedelta(hours=1)
+
+        # Verificar conflictos (solo avisar, no bloquear)
+        conflicts = await calendar_service.check_conflicts(start_dt, end_dt)
+        if conflicts:
+            conflict_names = [c.get('summary', 'Sin título') for c in conflicts[:3]]
+            calendar_warning = f"\n⚠️ <b>Conflicto en Calendar</b>: {', '.join(conflict_names)}"
+
+        # Intentar crear en Calendar
+        try:
+            created_event = await calendar_service.create_event(
+                summary=intent.detalles,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                recurrence=intent.recurrencia,
+            )
+            if created_event:
+                calendar_event_id = created_event.get('id')
+                # Actualizar BD con calendar_event_id
+                await task_repo.update_task(task_id, calendar_event_id=calendar_event_id)
+                logger.info("calendar_event_synced", local_action="EVENTO",
+                           calendar_event_id=calendar_event_id, task_id=task_id)
+            else:
+                calendar_warning += "\n⚠️ No se pudo sincronizar con Google Calendar (¿token expirado?)."
+        except Exception as e:
+            logger.error("calendar_sync_failed", error=str(e), task_id=task_id)
+            calendar_warning += "\n⚠️ Error sincronizando con Calendar."
 
     # Respuesta al usuario
     respuesta = _build_confirmation_message(intent, task_id, calendar_event_id)
+    if calendar_warning:
+        respuesta += calendar_warning
 
     # Programar recordatorio si es RECORDATORIO
     if intent.accion == ActionType.RECORDATORIO and intent.fecha_hora:
