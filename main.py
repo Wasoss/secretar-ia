@@ -834,6 +834,9 @@ async def ver_revision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error("ver_revision_error", error=str(e), exc_info=True)
         await update.message.reply_text("❌ Error al generar revisión. Reintentá en unos segundos.")
+
+
+def _build_confirmation_message(intent: ParsedIntent, task_id: int, calendar_event_id: Optional[str]) -> str:
     """Construye mensaje de confirmación bonito."""
     icons = {
         ActionType.EVENTO: "📅",
