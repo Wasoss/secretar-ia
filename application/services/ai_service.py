@@ -216,6 +216,18 @@ Usuario: "Avancé 2h en estudiar"
 
 Usuario: "Revisión semanal"
 → {{"accion":"REVISION_SEMANAL","detalles":"Generar revisión semanal","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
+Usuario: "Reunión en el colegio mañana 8am"
+→ {"accion":"EVENTO","detalles":"Reunión en el colegio","fecha_hora":"2025-01-15 08:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}
+
+Usuario: "reunión de prueba mañana a las 14hs"
+→ {"accion":"EVENTO","detalles":"reunión de prueba","fecha_hora":"2025-01-15 14:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}
+
+Usuario: "Recordame llamar a mamá mañana a las 10"
+→ {"accion":"RECORDATORIO","detalles":"Llamar a mamá","fecha_hora":"2025-01-15 10:00","recurrencia":null,"prioridad":0,"tags":["familia"],"tarea_original_id":null,"confianza":0.95}
+
+Usuario: "Cita dentista el 25/12 a las 10:30"
+→ {"accion":"EVENTO","detalles":"Cita dentista","fecha_hora":"2025-12-25 10:30","recurrencia":null,"prioridad":0,"tags":["salud"],"tarea_original_id":null,"confianza":0.95}
+
 """.strip()
 
 
