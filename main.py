@@ -211,6 +211,12 @@ async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message:
             await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
 
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /status - Estado rápido del bot."""
+    if not await verificar_usuario(update):
+        return
+    await update.message.reply_text("✅ Bot operativo")
+
 async def test_sistema(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /test - Diagnóstico del sistema."""
     if not await verificar_usuario(update):
@@ -1421,9 +1427,10 @@ def main():
 
     # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ayuda", ayuda))
+    app.add_handler(CommandHandler("ayuda", ajuda))
     app.add_handler(CommandHandler("test", test_sistema))
     app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("calendar_status", calendar_status))
     app.add_handler(CommandHandler("notas", ver_notas))
     app.add_handler(CommandHandler("hoy", ver_hoy))
