@@ -1386,6 +1386,12 @@ def main():
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO | filters.Document.AUDIO, recibir_audio))
     app.add_handler(CallbackQueryHandler(callback_completar, pattern="^(complete_|delete_|subtask_)"))
 
+    # Error handler para evitar "No error handlers are registered"
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error("bot_error", error=str(context.error), exc_info=context.error)
+
+    app.add_error_handler(error_handler)
+
     # Lifecycle hooks
     app.post_init = post_init
     app.post_shutdown = post_shutdown

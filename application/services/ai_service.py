@@ -427,11 +427,11 @@ class AIService:
         # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10"
         patterns = [
             # "mañana 9hs", "mañana 9am", "mañana 9:30", "mañana reunion 14hs", "mañana a las 14hs"
-            (r'(mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
+            (r'(?:mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
             # "hoy 15hs", "hoy 15:30", "hoy reunion 10hs"
-            (r'(hoy)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 0),
+            (r'(?:hoy)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 0),
             # "pasado mañana 10hs", "pasado mañana 10:30"
-            (r'(pasado\s+mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 2),
+            (r'(?:pasado\s+mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 2),
             # "semana que viene 10hs", "la semana que viene 10hs", "próxima semana 10hs", "la próxima semana 10hs"
             (r'(?:la\s+)?(?:semana\s+que\s+viene|pr[oó]xima\s+semana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 7),
             # "el 25/12 a las 10", "el 25/12 10hs"
