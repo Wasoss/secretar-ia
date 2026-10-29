@@ -228,6 +228,18 @@ Usuario: "Recordame llamar a mamá mañana a las 10"
 Usuario: "Cita dentista el 25/12 a las 10:30"
 → {{"accion":"EVENTO","detalles":"Cita dentista","fecha_hora":"2025-12-25 10:30","recurrencia":null,"prioridad":0,"tags":["salud"],"tarea_original_id":null,"confianza":0.95}}
 
+Usuario: "mañana 9hs reunion con Diana"
+→ {{"accion":"EVENTO","detalles":"reunion con Diana","fecha_hora":"2025-01-15 09:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
+
+Usuario: "mañana 10hs medico"
+→ {{"accion":"EVENTO","detalles":"medico","fecha_hora":"2025-01-15 10:00","recurrencia":null,"prioridad":0,"tags":["salud"],"tarea_original_id":null,"confianza":0.95}}
+
+Usuario: "hoy 15hs llamada cliente"
+→ {{"accion":"EVENTO","detalles":"llamada cliente","fecha_hora":"2025-01-14 15:00","recurrencia":null,"prioridad":0,"tags":["trabajo"],"tarea_original_id":null,"confianza":0.95}}
+
+Usuario: "pasado mañana 11hs reunion equipo"
+→ {{"accion":"EVENTO","detalles":"reunion equipo","fecha_hora":"2025-01-16 11:00","recurrencia":null,"prioridad":0,"tags":["trabajo"],"tarea_original_id":null,"confianza":0.95}}
+
 """.strip()
 
 
@@ -318,8 +330,8 @@ class AIService:
 
             result = json.loads(content)
 
-            # Validar y normalizar
-            intent = self._normalize_result(result)
+            # Validar y normalizar (pasar texto original para fallback de fechas)
+            intent = self._normalize_result(result, text)
 
             # Guardar en contexto
             self.add_context(text, intent)
@@ -345,7 +357,7 @@ class AIService:
                 confianza=0.0
             )
 
-    def _normalize_result(self, result: Dict[str, Any]) -> ParsedIntent:
+    def _normalize_result(self, result: Dict[str, Any], original_text: str = "") -> ParsedIntent:
         """Normaliza y valida el resultado del LLM."""
         # Acción
         accion_str = result.get("accion", "ERROR")
@@ -377,6 +389,10 @@ class AIService:
                             continue
             except Exception:
                 pass
+
+        # FALLBACK: Si la IA no devolvió fecha, intentar extraer con regex del texto original
+        if fecha_hora is None and original_text:
+            fecha_hora = self._parse_relative_date(original_text)
 
         # Recurrencia
         recurrencia = result.get("recurrencia")
@@ -435,6 +451,76 @@ class AIService:
             objetivo_valor=objetivo_valor,
             objetivo_unidad=objetivo_unidad
         )
+
+    def _parse_relative_date(self, text: str) -> Optional[datetime.datetime]:
+        """
+        Parsea fechas relativas del texto original cuando la IA falla.
+        Soporta: "mañana 9hs", "hoy 15:30", "pasado mañana 10hs", "el 25/12 a las 10", etc.
+        """
+        import re
+        from datetime import datetime, timedelta
+
+        text_lower = text.lower()
+        now = datetime.now(settings.tz)
+        hoy = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Patrones: "mañana 9hs", "mañana a las 9", "hoy 15:30", "pasado mañana 10hs", "el 25/12 a las 10"
+        patterns = [
+            # "mañana 9hs", "mañana 9am", "mañana 9:30"
+            (r'(mañana)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
+            # "hoy 15hs", "hoy 15:30"
+            (r'(hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 0),
+            # "pasado mañana 10hs", "pasado mañana 10:30"
+            (r'(pasado\s+mañana)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 2),
+            # "el 25/12 a las 10", "el 25/12 10hs"
+            (r'el\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
+        ]
+
+        for pattern, day_offset in patterns:
+            match = re.search(pattern, text.lower())
+            if match:
+                try:
+                    groups = match.groups()
+
+                    if day_offset is not None:
+                        # mañana / hoy / pasado mañana
+                        base_date = hoy + timedelta(days=day_offset)
+                        hour = int(match.group(2))
+                        minute = int(match.group(3)) if match.group(3) else 0
+                        ampm = match.group(4) if len(match.groups()) >= 4 else None
+                    else:
+                        # el DD/MM
+                        day = int(match.group(1))
+                        month = int(match.group(2))
+                        year = now.year
+                        # Si la fecha ya pasó este año, usar el próximo
+                        try:
+                            test_date = datetime(year, month, day)
+                            if test_date < now:
+                                year += 1
+                        except ValueError:
+                            continue
+                        base_date = datetime(year, month, day)
+                        hour = int(match.group(3)) if match.group(3) else 0
+                        minute = int(match.group(4)) if match.group(4) else 0
+                        ampm = match.group(5) if len(match.groups()) >= 5 else None
+
+                    # Manejar AM/PM
+                    if ampm and 'pm' in ampm and hour < 12:
+                        hour += 12
+                    elif ampm and 'am' in ampm and hour == 12:
+                        hour = 0
+
+                    # Validar hora
+                    if 0 <= hour <= 23 and 0 <= minute <= 59:
+                        dt = base_date.replace(hour=hour, minute=minute, tzinfo=settings.tz)
+                        logger.debug("relative_date_parsed", text=text, result=dt.isoformat())
+                        return dt
+
+                except (ValueError, IndexError, AttributeError):
+                    continue
+
+        return None
 
     async def transcribe_audio(self, audio_path: str) -> Optional[str]:
         """

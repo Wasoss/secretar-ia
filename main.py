@@ -497,6 +497,17 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 async def handle_guardar_tarea(update: Update, context: ContextTypes.DEFAULT_TYPE,
                                chat_id: str, intent: ParsedIntent):
     """Guarda EVENTO, RECORDATORIO o NOTA en BD y Calendar si aplica."""
+
+    # Validación: EVENTO requiere fecha/hora
+    if intent.accion == ActionType.EVENTO and not intent.fecha_hora:
+        await update.message.reply_text(
+            "📅 <b>Evento sin fecha/hora</b>\n\n"
+            "Para agendar en Calendar necesitás día y hora.\n"
+            "Probá: <i>\"mañana 9hs reunión con Juan\"</i> o <i>\"el 25/12 a las 10hs cita\"</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     calendar_event_id = None
     calendar_warning = ""
 
