@@ -135,6 +135,7 @@ R15: "META:"/"OBJETIVO:"/"MI META"/"MI OBJETIVO" → OBJETIVO_CREAR (con valor y
 R16: "OBJETIVOS"/"MIS OBJETIVOS"/"MIS METAS" → OBJETIVO_LISTAR
 R17: "AVANCÉ"/"PROGRESÓ"/"HICE [X] EN [OBJETIVO]" → OBJETIVO_PROGRESO
 R18: "REVISIÓN SEMANAL"/"CÓMO FUE LA SEMANA"/"RESUMEN SEMANAL" → REVISION_SEMANAL
+R19: "LISTA DE COMANDOS"/"COMANDOS"/"AYUDA" (texto libre) → CONVERSACION (responder con lista de comandos)
 
 === FECHAS RELATIVAS (siempre resolver a YYYY-MM-DD HH:MM) ===
 - "hoy" → fecha actual
@@ -320,7 +321,7 @@ class AIService:
                 model=settings.groq_model,
                 response_format={"type": "json_object"},
                 temperature=0.0,
-                max_tokens=300,
+                max_tokens=600,
                 timeout=30.0,
             )
 

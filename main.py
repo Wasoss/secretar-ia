@@ -417,6 +417,11 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     chat_id = str(update.message.chat_id)
 
+    # Shortcut: "lista de comandos" → mostrar ayuda directamente
+    if texto_usuario.lower().strip() in ("lista de comandos", "comandos", "ayuda"):
+        await ayuda(update, context)
+        return
+
     # Clasificar intención con IA
     intent: ParsedIntent = await ai_service.classify_intent(texto_usuario)
 
