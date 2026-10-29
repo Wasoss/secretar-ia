@@ -190,11 +190,15 @@ Extraer #hashtags o palabras clave.
 "Mis objetivos" → {{"accion":"OBJETIVO_LISTAR"}}
 "Avancé 2h en estudio" → {{"accion":"OBJETIVO_PROGRESO","detalles":"estudio","objetivo_valor":2,"objetivo_unidad":"horas"}}
 "Revisión semanal" → {{"accion":"REVISION_SEMANAL"}}
-"Ayuda" / "Lista de comandos" → {{"accion":"AYUDA"}}
+"ayuda" → {{"accion":"AYUDA"}}
+"lista de comandos" → {{"accion":"AYUDA"}}
+"comandos" → {{"accion":"AYUDA"}}
 "Reunión en el colegio mañana 8am" → {{"accion":"EVENTO","detalles":"Reunión en el colegio","fecha_hora":"2025-01-15 08:00"}}
 "mañana 9hs reunion con Diana" → {{"accion":"EVENTO","detalles":"reunion con Diana","fecha_hora":"2025-01-15 09:00"}}
 "hoy 15hs llamada cliente" → {{"accion":"EVENTO","detalles":"llamada cliente","fecha_hora":"2025-01-14 15:00"}}
 "Recordame llamar a mamá mañana 10" → {{"accion":"RECORDATORIO","detalles":"Llamar a mamá","fecha_hora":"2025-01-15 10:00"}}
+"Reunión semana que viene 13hs" → {{"accion":"EVENTO","detalles":"Reunión","fecha_hora":"2025-01-20 13:00"}}
+"Mañana reunion con Joaquin 14hs" → {{"accion":"EVENTO","detalles":"reunion con Joaquin","fecha_hora":"2025-01-15 14:00"}}
 """.strip()
 
 
@@ -420,14 +424,16 @@ class AIService:
         now = datetime.now(settings.tz)
         hoy = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Patrones: "mañana 9hs", "mañana a las 9", "hoy 15:30", "pasado mañana 10hs", "el 25/12 a las 10"
+        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10"
         patterns = [
-            # "mañana 9hs", "mañana 9am", "mañana 9:30"
-            (r'(mañana)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
-            # "hoy 15hs", "hoy 15:30"
-            (r'(hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 0),
+            # "mañana 9hs", "mañana 9am", "mañana 9:30", "mañana reunion 14hs", "mañana a las 14hs"
+            (r'(mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
+            # "hoy 15hs", "hoy 15:30", "hoy reunion 10hs"
+            (r'(hoy)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 0),
             # "pasado mañana 10hs", "pasado mañana 10:30"
-            (r'(pasado\s+mañana)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 2),
+            (r'(pasado\s+mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 2),
+            # "semana que viene 10hs", "la semana que viene 10hs", "próxima semana 10hs", "la próxima semana 10hs"
+            (r'(?:la\s+)?(?:semana\s+que\s+viene|pr[oó]xima\s+semana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 7),
             # "el 25/12 a las 10", "el 25/12 10hs"
             (r'el\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
         ]
@@ -436,20 +442,18 @@ class AIService:
             match = re.search(pattern, text.lower())
             if match:
                 try:
-                    groups = match.groups()
-
+                    # Patrones con day_offset (mañana, hoy, pasado mañana, semana que viene)
                     if day_offset is not None:
-                        # mañana / hoy / pasado mañana
+                        # Todas estas tienen: group(1)=hora, group(2)=minutos, group(3)=ampm
+                        hour = int(match.group(1))
+                        minute = int(match.group(2)) if match.group(2) else 0
+                        ampm = match.group(3) if len(match.groups()) >= 3 else None
                         base_date = hoy + timedelta(days=day_offset)
-                        hour = int(match.group(2))
-                        minute = int(match.group(3)) if match.group(3) else 0
-                        ampm = match.group(4) if len(match.groups()) >= 4 else None
                     else:
-                        # el DD/MM
+                        # el DD/MM: group(1)=day, group(2)=month, group(3)=hour, group(4)=min, group(5)=ampm
                         day = int(match.group(1))
                         month = int(match.group(2))
                         year = now.year
-                        # Si la fecha ya pasó este año, usar el próximo
                         try:
                             test_date = datetime(year, month, day)
                             if test_date < now:

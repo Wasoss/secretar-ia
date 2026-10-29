@@ -417,8 +417,10 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     chat_id = str(update.message.chat_id)
 
-    # Shortcut: "lista de comandos" → mostrar ayuda directamente
-    if texto_usuario.lower().strip() in ("lista de comandos", "comandos", "ayuda"):
+    # Shortcut: comandos de ayuda → mostrar ayuda directamente (antes de IA)
+    texto_lower = texto_usuario.lower().strip()
+    if texto_lower in ("lista de comandos", "comandos", "ayuda", "menu", "menú", "help"):
+        logger.info("help_shortcut_triggered", text=texto_usuario)
         await ayuda(update, context)
         return
 
