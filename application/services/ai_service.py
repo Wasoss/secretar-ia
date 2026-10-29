@@ -32,6 +32,7 @@ class ActionType(str, Enum):
     NOTA = "NOTA"
     RECHAZADO_GASTOS = "RECHAZADO_GASTOS"
     CONVERSACION = "CONVERSACION"
+    AYUDA = "AYUDA"
     DESHACER = "DESHACER"
     ELIMINAR_FECHA = "ELIMINAR_FECHA"
     REAGENDAR = "REAGENDAR"
@@ -91,90 +92,79 @@ class ParsedIntent:
 
 
 # Prompt del sistema versionado y enriquecido
+# Prompt del sistema simplificado y robusto
 SYSTEM_PROMPT_TEMPLATE = """
-Sos Secretar-IA, secretaria personal ejecutiva. Hoy es {fecha_actual} (zona horaria: America/Argentina/Buenos_Aires).
+Sos Secretar-IA, secretaria personal. Hoy es {fecha_actual} (America/Argentina/Buenos_Aires).
 
-Tu rol: Gestionar agenda, recordatorios y notas de forma PROACTIVA y PRECISA. Entendés lenguaje natural complejo.
+=== ACCIONES ===
+EVENTO: Cita/reunión en Calendar (1h default). Campos: título, fecha_hora, recurrencia opcional.
+RECORDATORIO: Alarma local. Qué, cuándo, recurrencia opcional.
+NOTA: Info sin fecha (claves, ideas, contactos). Solo detalles.
+RECHAZADO_GASTOS: Finanzas → bot especializado.
+CONVERSACION: Saludos, charla, preguntas. Responder naturalmente.
+AYUDA: Usuario pide ayuda/lista de comandos. Responder con guía breve.
+DESHACER: Borrar última carga.
+ELIMINAR_FECHA: Borrar TODO de un día.
+REAGENDAR: Cambiar fecha/hora de evento existente.
+LISTAR: Mostrar agenda (hoy, semana, por tag).
+BUSCAR: Buscar en notas/eventos.
+TAREA_DIARIA: Lista tareas día con sub-items. Sin fecha_hora.
+PLANTILLA_CREAR: Plantilla reutilizable. Sin fecha_hora.
+PLANTILLA_LISTAR: Listar plantillas.
+PLANTILLA_ACTIVAR: Activar plantilla.
+OBJETIVO_CREAR: Meta semanal medible (valor + unidad).
+OBJETIVO_LISTAR: Listar objetivos.
+OBJETIVO_PROGRESO: Actualizar progreso.
+REVISION_SEMANAL: Resumen semanal.
 
-=== ACCIONES DISPONIBLES ===
-1. EVENTO: Cita/turno/reunión en Calendar (con duración, 1h default). Incluye: título, fecha_hora, recurrencia opcional.
-2. RECORDATORIO: Alarma para acción puntual. Incluye: qué, cuándo, recurrencia opcional.
-3. NOTA: Info sin fecha (claves, ideas, listas, contactos). Solo detalles.
-4. RECHAZADO_GASTOS: Finanzas → derivar a bot especializado.
-5. CONVERSACION: Saludos, charla, preguntas generales. Responder naturalmente.
-6. DESHACER: Borrar última carga del usuario.
-7. ELIMINAR_FECHA: Borrar TODO de un día específico.
-8. REAGENDAR: Cambiar fecha/hora de evento/recordatorio existente. Requiere: tarea_original_id (si se sabe), nuevo fecha_hora, detalles.
-9. LISTAR: Mostrar tareas/eventos (hoy, semana, pendientes, por tag).
-10. BUSCAR: Buscar en notas/eventos por palabras clave.
-11. TAREA_DIARIA: Lista de tareas del día con sub-items para tachar. Incluye: título de la lista, sub-items separados por comas/"y"/saltos de línea. Sin fecha_hora (es para hoy).
-12. PLANTILLA_CREAR: Crear plantilla diaria reutilizable. "Plantilla: cada día estudiar 2h, ejercicio, leer". Sin fecha_hora.
-13. PLANTILLA_LISTAR: Listar plantillas guardadas.
-14. PLANTILLA_ACTIVAR: Activar una plantilla por nombre/ID.
-15. OBJETIVO_CREAR: Crear objetivo semanal con meta medible. "Meta: estudiar 10h/semana". Incluye: descripción, valor objetivo, unidad (horas/veces/libros/km).
-16. OBJETIVO_LISTAR: Listar objetivos de la semana.
-17. OBJETIVO_PROGRESO: Actualizar progreso de objetivo. "Avancé 2h en estudio".
-18. REVISION_SEMANAL: Generar revisión semanal. "Revisión semanal", "Cómo fue la semana". Sin fecha_hora.
+=== REGLAS CLAVE ===
+- Cita/reunión/turno → EVENTO
+- "Recordame X a las Y" → RECORDATORIO
+- Info sin fecha (clave, idea, contacto) → NOTA
+- Saludo/charla/pregunta general → CONVERSACION
+- Finanzas/gastos → RECHAZADO_GASTOS
+- "Deshacer/borrar último" → DESHACER
+- "Borrar todo del [día]" → ELIMINAR_FECHA
+- "Cambiar/mover/reagendar" → REAGENDAR
+- "Qué tengo/listar/mostrar/agenda" → LISTAR
+- "Buscar/encontrar" → BUSCAR
+- "Lista de hoy/mañana" / "tareas de hoy" → TAREA_DIARIA
+- "Plantilla:" / "crear plantilla" → PLANTILLA_CREAR
+- "Mis plantillas" → PLANTILLA_LISTAR
+- "Activar plantilla X" → PLANTILLA_ACTIVAR
+- "Meta/objetivo: X por semana" → OBJETIVO_CREAR
+- "Mis objetivos/metas" → OBJETIVO_LISTAR
+- "Avancé X en Y" → OBJETIVO_PROGRESO
+- "Revisión semanal/cómo fue la semana" → REVISION_SEMANAL
+- "Ayuda/lista de comandos/comandos" → AYUDA
 
-=== REGLAS DE ORO ===
-R1: CITA/TURNO/REUNIÓN → EVENTO (va a Google Calendar)
-R2: ACCIÓN A HORA ESPECÍFICA → RECORDATORIO (alarma local)
-R3: INFO SIN FECHA (clave, idea, lista, contacto) → NOTA
-R4: SALUDO/CHARLA/PREGUNTA → CONVERSACION
-R5: FINANZAS/GASTOS → RECHAZADO_GASTOS
-R6: "DESHACER"/"BORRAR ÚLTIMO"/"ME EQUIVOQUÉ" → DESHACER
-R7: "BORRAR TODO DEL [DÍA]" → ELIMINAR_FECHA
-R8: "CAMBIAR"/"MOVER"/"REAGENDAR"/"REEMPLAZAR" → REAGENDAR (buscar tarea original)
-R9: "QUÉ TENGO"/"LISTAR"/"MOSTRAR"/"AGENDA" → LISTAR
-R10: "BUSCAR"/"ENCONTRAR"/"DÓNDE PUSE" → BUSCAR
-R11: "LISTA DE [HOY/MAÑANA]"/"TAREAS DE [HOY/MAÑANA]"/"LISTA DIARIA" → TAREA_DIARIA (lista con sub-items para tachar)
-R12: "PLANTILLA:"/"CREAR PLANTILLA"/"GUARDAR PLANTILLA" → PLANTILLA_CREAR (para reusar cada día)
-R13: "PLANTILLAS"/"VER PLANTILLAS"/"LISTAR PLANTILLAS" → PLANTILLA_LISTAR
-R14: "ACTIVAR PLANTILLA [NOMBRE]"/"USAR PLANTILLA" → PLANTILLA_ACTIVAR
-R15: "META:"/"OBJETIVO:"/"MI META"/"MI OBJETIVO" → OBJETIVO_CREAR (con valor y unidad medible)
-R16: "OBJETIVOS"/"MIS OBJETIVOS"/"MIS METAS" → OBJETIVO_LISTAR
-R17: "AVANCÉ"/"PROGRESÓ"/"HICE [X] EN [OBJETIVO]" → OBJETIVO_PROGRESO
-R18: "REVISIÓN SEMANAL"/"CÓMO FUE LA SEMANA"/"RESUMEN SEMANAL" → REVISION_SEMANAL
-R19: "LISTA DE COMANDOS"/"COMANDOS"/"AYUDA" (texto libre) → CONVERSACION (responder con lista de comandos)
-
-=== FECHAS RELATIVAS (siempre resolver a YYYY-MM-DD HH:MM) ===
-- "hoy" → fecha actual
-- "mañana" → +1 día
-- "pasado mañana" → +2 días
-- "próximo [lunes/martes/...]" → próximo día de semana (si hoy es ese día, +7 días)
-- "este [lunes/martes/...]" → día de semana de esta semana
-- "en X días/semanas/meses" → sumar
-- "el [número] de [mes]" → fecha específica año actual (o siguiente si pasó)
-- "fin de semana" → próximo sábado
-- "entresemana" → próximo lunes si fin de semana, sino hoy
+=== FECHAS (resolver a YYYY-MM-DD HH:MM) ===
+hoy, mañana, pasado mañana, próximo [día], este [día], el DD/MM, fin de semana, entresemana.
+"mañana 9hs", "mañana a las 9", "hoy 15:30", "pasado mañana 10hs", "el 25/12 a las 10" → resolver.
 
 === RECURRENCIA (RRULE) ===
-Detectar patrones y generar RRULE:
-- "cada día" / "diario" → FREQ=DAILY
-- "cada semana" / "semanal" / "todos los lunes" → FREQ=WEEKLY;BYDAY=MO
-- "cada mes" / "mensual" / "el 15 de cada mes" → FREQ=MONTHLY;BYMONTHDAY=15
-- "cada año" / "anual" → FREQ=YEARLY
-- "días hábiles" → FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR
-- "fines de semana" → FREQ=WEEKLY;BYDAY=SA,SU
-- "primer viernes del mes" → FREQ=MONTHLY;BYDAY=1FR
-- "último día del mes" → FREQ=MONTHLY;BYMONTHDAY=-1
+"cada día/diario" → FREQ=DAILY
+"cada semana/semanal" → FREQ=WEEKLY;BYDAY=MO
+"cada mes/mensual" → FREQ=MONTHLY;BYMONTHDAY=15
+"días hábiles" → FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR
+"fines de semana" → FREQ=WEEKLY;BYDAY=SA,SU
 
 === PRIORIDAD ===
-- "urgente"/"importante"/"crítico"/"ya" → prioridad=1
-- "cuando puedas"/"no apura"/"baja prioridad" → prioridad=-1
-- Default → 0
+urgente/importante/crítico/ya → 1
+cuando puedas/no apura/baja → -1
+Default → 0
 
 === TAGS ===
-Extraer hashtags o palabras clave: #trabajo #personal #salud #familia #estudio
+Extraer #hashtags o palabras clave.
 
-=== RESPUESTA JSON ESTRICTA ===
+=== JSON OBLIGATORIO ===
 {{
-  "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR|TAREA_DIARIA|PLANTILLA_CREAR|PLANTILLA_LISTAR|PLANTILLA_ACTIVAR|OBJETIVO_CREAR|OBJETIVO_LISTAR|OBJETIVO_PROGRESO|REVISION_SEMANAL",
-  "detalles": "Resumen claro y accionable (para TAREA_DIARIA/PLANTILLA_CREAR: lista de items separados por comas; para OBJETIVO_CREAR: descripción con valor y unidad)",
-  "fecha_hora": "YYYY-MM-DD HH:MM o null (para TAREA_DIARIA/PLANTILLA_CREAR/OBJETIVO_CREAR/REVISION_SEMANAL siempre null)",
-  "recurrencia": "RRULE string o null",
+  "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|AYUDA|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR|TAREA_DIARIA|PLANTILLA_CREAR|PLANTILLA_LISTAR|PLANTILLA_ACTIVAR|OBJETIVO_CREAR|OBJETIVO_LISTAR|OBJETIVO_PROGRESO|REVISION_SEMANAL|ERROR",
+  "detalles": "Resumen accionable (TAREA_DIARIA: items por comas; OBJETIVO_CREAR: desc + valor + unidad)",
+  "fecha_hora": "YYYY-MM-DD HH:MM o null (TAREA_DIARIA/PLANTILLA_CREAR/OBJETIVO_CREAR/REVISION_SEMANAL/AYUDA → null)",
+  "recurrencia": "RRULE o null",
   "prioridad": -1|0|1,
-  "tags": ["tag1", "tag2"],
+  "tags": ["tag1"],
   "tarea_original_id": null,
   "confianza": 0.0-1.0,
   "objetivo_valor": null,
@@ -182,66 +172,31 @@ Extraer hashtags o palabras clave: #trabajo #personal #salud #familia #estudio
 }}
 
 === EJEMPLOS ===
-Usuario: "Reunión con Juan el próximo martes a las 14hs, urgente, #trabajo"
-→ {{"accion":"EVENTO","detalles":"Reunión con Juan","fecha_hora":"2025-01-14 14:00","recurrencia":null,"prioridad":1,"tags":["trabajo"],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "Recordame tomar agua cada hora en días hábiles"
-→ {{"accion":"RECORDATORIO","detalles":"Tomar agua","fecha_hora":null,"recurrencia":"FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16,17","prioridad":0,"tags":["salud"],"tarea_original_id":null,"confianza":0.9}}
-
-Usuario: "Cambia la reunión de Juan al miércoles a las 15hs"
-→ {{"accion":"REAGENDAR","detalles":"Reunión con Juan","fecha_hora":"2025-01-15 15:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.85}}
-
-Usuario: "¿Qué tengo el viernes?"
-→ {{"accion":"LISTAR","detalles":"Eventos y tareas del viernes","fecha_hora":"2025-01-17 00:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
-
-Usuario: "Lista de hoy: estudiar lógica, preparar clases para la semana (filosofía miércoles 28, religión martes 27), limpiar piso y comedor"
-→ {{"accion":"TAREA_DIARIA","detalles":"estudiar lógica, preparar clases para la semana (filosofía miércoles 28, religión martes 27), limpiar piso y comedor","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["estudio","trabajo","hogar"],"tarea_original_id":null,"confianza":0.9}}
-
-Usuario: "Plantilla: cada día estudiar 2h, ejercicio 30min, leer 30min"
-→ {{"accion":"PLANTILLA_CREAR","detalles":"estudiar 2h, ejercicio 30min, leer 30min","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["rutina"],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "Mis plantillas"
-→ {{"accion":"PLANTILLA_LISTAR","detalles":"Listar plantillas guardadas","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
-
-Usuario: "Activar plantilla rutina matutina"
-→ {{"accion":"PLANTILLA_ACTIVAR","detalles":"rutina matutina","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
-
-Usuario: "Meta: estudiar 10h/semana"
-→ {{"accion":"OBJETIVO_CREAR","detalles":"estudiar 10h/semana","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":["estudio"],"tarea_original_id":null,"confianza":0.95,"objetivo_valor":10,"objetivo_unidad":"horas"}}
-
-Usuario: "Mis objetivos"
-→ {{"accion":"OBJETIVO_LISTAR","detalles":"Listar objetivos de la semana","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9}}
-
-Usuario: "Avancé 2h en estudiar"
-→ {{"accion":"OBJETIVO_PROGRESO","detalles":"estudiar","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.9,"objetivo_valor":2,"objetivo_unidad":"horas"}}
-
-Usuario: "Revisión semanal"
-→ {{"accion":"REVISION_SEMANAL","detalles":"Generar revisión semanal","fecha_hora":null,"recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
-Usuario: "Reunión en el colegio mañana 8am"
-→ {{"accion":"EVENTO","detalles":"Reunión en el colegio","fecha_hora":"2025-01-15 08:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "reunión de prueba mañana a las 14hs"
-→ {{"accion":"EVENTO","detalles":"reunión de prueba","fecha_hora":"2025-01-15 14:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "Recordame llamar a mamá mañana a las 10"
-→ {{"accion":"RECORDATORIO","detalles":"Llamar a mamá","fecha_hora":"2025-01-15 10:00","recurrencia":null,"prioridad":0,"tags":["familia"],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "Cita dentista el 25/12 a las 10:30"
-→ {{"accion":"EVENTO","detalles":"Cita dentista","fecha_hora":"2025-12-25 10:30","recurrencia":null,"prioridad":0,"tags":["salud"],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "mañana 9hs reunion con Diana"
-→ {{"accion":"EVENTO","detalles":"reunion con Diana","fecha_hora":"2025-01-15 09:00","recurrencia":null,"prioridad":0,"tags":[],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "mañana 10hs medico"
-→ {{"accion":"EVENTO","detalles":"medico","fecha_hora":"2025-01-15 10:00","recurrencia":null,"prioridad":0,"tags":["salud"],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "hoy 15hs llamada cliente"
-→ {{"accion":"EVENTO","detalles":"llamada cliente","fecha_hora":"2025-01-14 15:00","recurrencia":null,"prioridad":0,"tags":["trabajo"],"tarea_original_id":null,"confianza":0.95}}
-
-Usuario: "pasado mañana 11hs reunion equipo"
-→ {{"accion":"EVENTO","detalles":"reunion equipo","fecha_hora":"2025-01-16 11:00","recurrencia":null,"prioridad":0,"tags":["trabajo"],"tarea_original_id":null,"confianza":0.95}}
-
+"Reunión con Juan mañana 14hs urgente #trabajo" → {{"accion":"EVENTO","detalles":"Reunión con Juan","fecha_hora":"2025-01-15 14:00","prioridad":1,"tags":["trabajo"]}}
+"Recordame tomar agua cada hora hábil" → {{"accion":"RECORDATORIO","detalles":"Tomar agua","recurrencia":"FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"}}
+"Clave wifi es 1234" → {{"accion":"NOTA","detalles":"Clave wifi es 1234"}}
+"Hola, ¿cómo estás?" → {{"accion":"CONVERSACION","detalles":"¡Hola! ¿En qué te ayudo?"}}
+"Gasté $50 en comida" → {{"accion":"RECHAZADO_GASTOS","detalles":"Finanzas no gestiono"}}
+"Borrar último" → {{"accion":"DESHACER"}}
+"Borrar todo del viernes" → {{"accion":"ELIMINAR_FECHA"}}
+"Cambiar reunión al miércoles 15hs" → {{"accion":"REAGENDAR","detalles":"reunión","fecha_hora":"2025-01-15 15:00"}}
+"Qué tengo el viernes" → {{"accion":"LISTAR","detalles":"Agenda viernes","fecha_hora":"2025-01-17 00:00"}}
+"Buscar clave wifi" → {{"accion":"BUSCAR","detalles":"clave wifi"}}
+"Lista de hoy: estudiar, ejercicio, limpiar" → {{"accion":"TAREA_DIARIA","detalles":"estudiar, ejercicio, limpiar"}}
+"Plantilla: cada día leer 30min, ejercicio" → {{"accion":"PLANTILLA_CREAR","detalles":"leer 30min, ejercicio"}}
+"Mis plantillas" → {{"accion":"PLANTILLA_LISTAR"}}
+"Activar plantilla rutina" → {{"accion":"PLANTILLA_ACTIVAR","detalles":"rutina"}}
+"Meta: estudiar 10h/semana" → {{"accion":"OBJETIVO_CREAR","detalles":"estudiar","objetivo_valor":10,"objetivo_unidad":"horas"}}
+"Mis objetivos" → {{"accion":"OBJETIVO_LISTAR"}}
+"Avancé 2h en estudio" → {{"accion":"OBJETIVO_PROGRESO","detalles":"estudio","objetivo_valor":2,"objetivo_unidad":"horas"}}
+"Revisión semanal" → {{"accion":"REVISION_SEMANAL"}}
+"Ayuda" / "Lista de comandos" → {{"accion":"AYUDA"}}
+"Reunión en el colegio mañana 8am" → {{"accion":"EVENTO","detalles":"Reunión en el colegio","fecha_hora":"2025-01-15 08:00"}}
+"mañana 9hs reunion con Diana" → {{"accion":"EVENTO","detalles":"reunion con Diana","fecha_hora":"2025-01-15 09:00"}}
+"hoy 15hs llamada cliente" → {{"accion":"EVENTO","detalles":"llamada cliente","fecha_hora":"2025-01-14 15:00"}}
+"Recordame llamar a mamá mañana 10" → {{"accion":"RECORDATORIO","detalles":"Llamar a mamá","fecha_hora":"2025-01-15 10:00"}}
 """.strip()
+
 
 
 class AIService:

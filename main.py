@@ -443,6 +443,10 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         await update.message.reply_text(intent.detalles)
         return
 
+    if intent.accion == ActionType.AYUDA:
+        await ayuda(update, context)
+        return
+
     if intent.accion == ActionType.DESHACER:
         await handle_deshacer(update, chat_id)
         return
