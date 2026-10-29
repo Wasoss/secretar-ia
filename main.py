@@ -471,7 +471,12 @@ async def procesar_peticion(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     texto_lower = texto_usuario.lower().strip()
     if texto_lower in ("lista de comandos", "comandos", "ayuda", "menu", "menú", "help"):
         logger.info("help_shortcut_triggered", text=texto_usuario)
-        await ayuda(update, context)
+        try:
+            await ajuda(update, context)
+        except Exception as e:
+            logger.error("help_shortcut_error", error=str(e), exc_info=True)
+            if update.message:
+                await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
         return
 
     # Clasificar intención con IA
