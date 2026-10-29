@@ -128,45 +128,88 @@ async def guardar_chat_id(context: ContextTypes.DEFAULT_TYPE):
 
 async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /ayuda - Guía de funciones."""
-    if not await verificar_usuario(update):
-        return
+    try:
+        if not await verificar_usuario(update):
+            return
 
-    texto = (
-        "🤖 <b>Guía de Secretar-IA</b>\n\n"
-        "📅 <b>Eventos (Google Calendar):</b>\n"
-        "  <i>\"Reunión el martes a las 15hs\"</i>\n"
-        "  <i>\"Cita dentista el 20/01 a las 10:30\"</i>\n"
-        "  <i>\"Clase yoga cada lunes a las 19hs\"</i> (recurrente)\n\n"
-        "⏰ <b>Recordatorios (alarmas locales):</b>\n"
-        "  <i>\"Recordame llamar a mamá a las 18hs\"</i>\n"
-        "  <i>\"Avisame tomar pastillas cada 8hs\"</i> (recurrente)\n\n"
-        "📔 <b>Notas (sin fecha):</b>\n"
-        "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
-        "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
-        "☑️ <b>Tareas diarias (lista con sub-items):</b>\n"
-        "  <i>\"Lista de hoy: estudiar lógica, preparar clases, limpiar\"</i>\n"
-        "  → Se crea una lista con checkboxes para tachar individualmente\n\n"
-        "🔧 <b>Gestión avanzada:</b>\n"
-        "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
-        "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
-        "  <i>\"Deshacer\"</i> (borra último)\n\n"
-        "📋 <b>Comandos:</b>\n"
-        "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)\n"
-        "  /pendientes — Ver tareas diarias con sub-items para tachar\n"
-        "  /notas — Consultar notas guardadas\n"
-        "  /hoy — Ver agenda de hoy\n"
-        "  /semana — Ver agenda de la semana\n"
-        "  /buscar &lt;texto&gt; — Buscar en notas/eventos\n"
-        "  /tag <etiqueta> — Filtrar por tag\n"
-        "  /ayuda — Esta guía\n"
-        "  /test — Diagnóstico del sistema\n\n"
-        "💡 <b>Tips:</b> Usá #tag para organizar. "
-        "Palabras clave: <i>urgente</i> (prioridad alta), "
-        "<i>no apura</i> (baja).\n"
-        "Para lista diaria: decí <i>\"Lista de hoy: ...\"</i> o <i>\"Tareas de hoy: ...\"</i>"
-    )
-    await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+        texto = (
+            "🤖 <b>Guía de Secretar-IA</b>
 
+"
+            "📅 <b>Eventos (Google Calendar):</b>
+"
+            "  <i>"Reunión el martes a las 15hs"</i>
+"
+            "  <i>"Cita dentista el 20/01 a las 10:30"</i>
+"
+            "  <i>"Clase yoga cada lunes a las 19hs"</i> (recurrente)
+
+"
+            "⏰ <b>Recordatorios (alarmas locales):</b>
+"
+            "  <i>"Recordame llamar a mamá a las 18hs"</i>
+"
+            "  <i>"Avisame tomar pastillas cada 8hs"</i> (recurrente)
+
+"
+            "📔 <b>Notas (sin fecha):</b>
+"
+            "  <i>"Anotá la clave wifi es 1234"</i>
+"
+            "  <i>"Idea: regalo para Ana - libro"</i>
+
+"
+            "☑️ <b>Tareas diarias (lista con sub-items):</b>
+"
+            "  <i>"Lista de hoy: estudiar lógica, preparar clases, limpiar"</i>
+"
+            "  → Se crea una lista con checkboxes para tachar individualmente
+
+"
+            "🔧 <b>Gestión avanzada:</b>
+"
+            "  <i>"Cambia la reunión al miércoles 16hs"</i> (reagendar)
+"
+            "  <i>"Borrar todo del 25 de octubre"</i>
+"
+            "  <i>"Deshacer"</i> (borra último)
+
+"
+            "📋 <b>Comandos:</b>
+"
+            "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)
+"
+            "  /pendientes — Ver tareas diarias con sub-items para tachar
+"
+            "  /notas — Consultar notas guardadas
+"
+            "  /hoy — Ver agenda de hoy
+"
+            "  /semana — Ver agenda de la semana
+"
+            "  /buscar <texto> — Buscar en notas/eventos
+"
+            "  /tag <etiqueta> — Filtrar por tag
+"
+            "  /ayuda — Esta guía
+"
+            "  /test — Diagnóstico del sistema
+
+"
+            "💡 <b>Tips:</b> Usá #tag para organizar. "
+            "Palabras clave: <i>urgente</i> (prioridad alta), "
+            "<i>no apura</i> (baja).
+"
+            "Para lista diaria: decí <i>"Lista de hoy: ..."</i> o <i>"Tareas de hoy: ..."</i>"
+        )
+        if update.message:
+            await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+        else:
+            logger.warning("ayuda_called_without_message")
+    except Exception as e:
+        logger.error("ayuda_error", error=str(e), exc_info=True)
+        if update.message:
+            await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
 
 async def test_sistema(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /test - Diagnóstico del sistema."""
