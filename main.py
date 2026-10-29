@@ -197,6 +197,13 @@ async def test_sistema(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error en test:\n<code>{e}</code>", parse_mode=ParseMode.HTML)
 
 
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /ping - Test simple de conectividad."""
+    if not await verificar_usuario(update):
+        return
+    await update.message.reply_text("🏓 Pong! Bot funcionando correctamente.")
+
+
 async def calendar_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /calendar_status - Diagnóstico detallado de Google Calendar."""
     if not await verificar_usuario(update):
@@ -1368,6 +1375,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ayuda", ayuda))
     app.add_handler(CommandHandler("test", test_sistema))
+    app.add_handler(CommandHandler("ping", ping))
     app.add_handler(CommandHandler("calendar_status", calendar_status))
     app.add_handler(CommandHandler("notas", ver_notas))
     app.add_handler(CommandHandler("hoy", ver_hoy))
