@@ -132,48 +132,73 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await verificar_usuario(update):
             return
 
-        texto = (
-            "🤖 <b>Guía de Secretar-IA</b>\n\n"
-            "📅 <b>Eventos (Google Calendar):</b>\n\n"
-            "  <i>\"Reunión el martes a las 15hs\"</i>\n"
-            "  <i>\"Cita dentista el 20/01 a las 10:30\"</i>\n"
-            "  <i>\"Clase yoga cada lunes a las 19hs\"</i> (recurrente)\n\n"
-            "⏰ <b>Recordatorios (alarmas locales):</b>\n\n"
-            "  <i>\"Recordame llamar a mamá a las 18hs\"</i>\n"
-            "  <i>\"Avisame tomar pastillas cada 8hs\"</i> (recurrente)\n\n"
-            "📔 <b>Notas (sin fecha):</b>\n\n"
-            "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
-            "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
-            "☑️ <b>Tareas diarias (lista con sub-items):</b>\n\n"
-            "  <i>\"Lista de hoy: estudiar lógica, preparar clases, limpiar\"</i>\n"
-            "  → Se crea una lista con checkboxes para tachar individualmente\n\n"
-            "🔧 <b>Gestión avanzada:</b>\n\n"
-            "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
-            "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
-            "  <i>\"Deshacer\"</i> (borra último)\n\n"
-            "📋 <b>Comandos:</b>\n\n"
-            "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)\n"
-            "  /pendientes — Ver tareas diarias con sub-items para tachar\n"
-            "  /notas — Consultar notas guardadas\n"
-            "  /hoy — Ver agenda de hoy\n"
-            "  /semana — Ver agenda de la semana\n"
-            "  /buscar <texto> — Buscar en notas/eventos\n"
-            "  /tag <etiqueta> — Filtrar por tag\n"
-            "  /ayuda — Esta guía\n"
-            "  /test — Diagnóstico del sistema\n\n"
-            "💡 <b>Tips:</b> Usá #tag para organizar. "
-            "Palabras clave: <i>urgente</i> (prioridad alta), "
-            "<i>no apura</i> (baja).\n"
-            "Para lista diaria: decí <i>\"Lista de hoy: ...\"</i> o <i>\"Tareas de hoy: ...\"</i>"
-        )
-        if update.message:
-            await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
-        else:
-            logger.warning("ayuda_called_without_message")
+        # Texto dividido en partes para evitar límite de 4096 chars de Telegram
+        partes = [
+            (
+                "🤖 <b>Guía de Secretar-IA</b>\n\n"
+                "📅 <b>Eventos (Google Calendar):</b>\n\n"
+                "  <i>\"Reunión el martes a las 15hs\"</i>\n"
+                "  <i>\"Cita dentista el 20/01 a las 10:30\"</i>\n"
+                "  <i>\"Clase yoga cada lunes a las 19hs\"</i> (recurrente)\n\n"
+                "⏰ <b>Recordatorios (alarmas locales):</b>\n\n"
+                "  <i>\"Recordame llamar a mamá a las 18hs\"</i>\n"
+                "  <i>\"Avisame tomar pastillas cada 8hs\"</i> (recurrente)\n\n"
+                "📔 <b>Notas (sin fecha):</b>\n\n"
+                "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
+                "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
+            ),
+            (
+                "☑️ <b>Tareas diarias (lista con sub-items):</b>\n\n"
+                "  <i>\"Lista de hoy: estudiar lógica, preparar clases, limpiar\"</i>\n"
+                "  → Se crea una lista con checkboxes para tachar individualmente\n\n"
+                "🔧 <b>Gestión avanzada:</b>\n\n"
+                "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
+                "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
+                "  <i>\"Deshacer\"</i> (borra último)\n\n"
+            ),
+            (
+                "📋 <b>Comandos:</b>\n\n"
+                "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)\n"
+                "  /pendientes — Ver tareas diarias con sub-items para tachar\n"
+                "  /notas — Consultar notas guardadas\n"
+                "  /hoy — Ver agenda de hoy\n"
+                "  /semana — Ver agenda de la semana\n"
+                "  /buscar <texto> — Buscar en notas/eventos\n"
+                "  /tag <etiqueta> — Filtrar por tag\n"
+                "  /ayuda — Esta guía\n"
+                "  /test — Diagnóstico del sistema\n\n"
+            ),
+            (
+                "💡 <b>Tips:</b> Usá #tag para organizar. "
+                "Palabras clave: <i>urgente</i> (prioridad alta), "
+                "<i>no apura</i> (baja).\n"
+                "Para lista diaria: decí <i>\"Lista de hoy: ...\"</i> o <i>\"Tareas de hoy: ...\"</i>"
+            ),
+        ]
+
+        # Enviar partes secuencialmente
+        for i, parte in enumerate(partes):
+            try:
+                if update.message:
+                    await update.message.reply_text(parte, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logger.error("ayuda_part_error", part=i, error=str(e), exc_info=True)
+                if update.message:
+                    await update.message.reply_text("⚠️ Error al enviar parte de la ayuda. Probá /test")
+
     except Exception as e:
         logger.error("ayuda_error", error=str(e), exc_info=True)
         if update.message:
-            await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
+            # Manejar error de Conflict específicamente
+            error_msg = str(e)
+            if "conflict" in error_msg.lower() or "conflict" in error_msg.lower():
+                await update.message.reply_text(
+                    "⚠️ <b>Conflict detectado</b>: Hay otra instancia del bot corriendo.\n"
+                    "Detén la instancia local o hacé <i>Clear build cache & deploy</i> en Render.",
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
 
 
 
@@ -1417,7 +1442,24 @@ def main():
 
     # Error handler para evitar "No error handlers are registered"
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        logger.error("bot_error", error=str(context.error), exc_info=context.error)
+        error = context.error
+        error_msg = str(error)
+
+        # Manejar Conflict específicamente (dos instancias del bot)
+        if "Conflict: terminated by other getUpdates request" in error_msg or "ConflictError" in type(error).__name__:
+            logger.error("bot_conflict", error=error_msg)
+            if update and hasattr(update, 'message') and update.message:
+                try:
+                    await update.message.reply_text(
+                        "⚠️ <b>Conflict detectado</b>: Hay otra instancia del bot corriendo.\n"
+                        "Detén la instancia local o hacé <i>Clear build cache & deploy</i> en Render.",
+                        parse_mode=ParseMode.HTML
+                    )
+                except Exception:
+                    pass  # Si falla el envío, al menos se logueó
+            return
+
+        logger.error("bot_error", error=error_msg, exc_info=context.error)
 
     app.add_error_handler(error_handler)
 
