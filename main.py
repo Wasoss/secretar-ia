@@ -176,6 +176,7 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
 
 
+
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /status - Estado rápido del bot."""
     if not await verificar_usuario(update):
