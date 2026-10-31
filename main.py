@@ -132,74 +132,48 @@ async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await verificar_usuario(update):
             return
 
-        # Texto dividido en partes para evitar límite de 4096 chars de Telegram
-        partes = [
-            (
-                "🤖 <b>Guía de Secretar-IA</b>\n\n"
-                "📅 <b>Eventos (Google Calendar):</b>\n\n"
-                "  <i>\"Reunión el martes a las 15hs\"</i>\n"
-                "  <i>\"Cita dentista el 20/01 a las 10:30\"</i>\n"
-                "  <i>\"Clase yoga cada lunes a las 19hs\"</i> (recurrente)\n\n"
-                "⏰ <b>Recordatorios (alarmas locales):</b>\n\n"
-                "  <i>\"Recordame llamar a mamá a las 18hs\"</i>\n"
-                "  <i>\"Avisame tomar pastillas cada 8hs\"</i> (recurrente)\n\n"
-                "📔 <b>Notas (sin fecha):</b>\n\n"
-                "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
-                "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
-            ),
-            (
-                "☑️ <b>Tareas diarias (lista con sub-items):</b>\n\n"
-                "  <i>\"Lista de hoy: estudiar lógica, preparar clases, limpiar\"</i>\n"
-                "  → Se crea una lista con checkboxes para tachar individualmente\n\n"
-                "🔧 <b>Gestión avanzada:</b>\n\n"
-                "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
-                "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
-                "  <i>\"Deshacer\"</i> (borra último)\n\n"
-            ),
-            (
-                "📋 <b>Comandos:</b>\n\n"
-                "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)\n"
-                "  /pendientes — Ver tareas diarias con sub-items para tachar\n"
-                "  /notas — Consultar notas guardadas\n"
-                "  /hoy — Ver agenda de hoy\n"
-                "  /semana — Ver agenda de la semana\n"
-                "  /buscar <texto> — Buscar en notas/eventos\n"
-                "  /tag <etiqueta> — Filtrar por tag\n"
-                "  /ayuda — Esta guía\n"
-                "  /test — Diagnóstico del sistema\n\n"
-            ),
-            (
-                "💡 <b>Tips:</b> Usá #tag para organizar. "
-                "Palabras clave: <i>urgente</i> (prioridad alta), "
-                "<i>no apura</i> (baja).\n"
-                "Para lista diaria: decí <i>\"Lista de hoy: ...\"</i> o <i>\"Tareas de hoy: ...\"</i>"
-            ),
-        ]
-
-        # Enviar partes secuencialmente
-        for i, parte in enumerate(partes):
-            try:
-                if update.message:
-                    await update.message.reply_text(parte, parse_mode=ParseMode.HTML)
-            except Exception as e:
-                logger.error("ayuda_part_error", part=i, error=str(e), exc_info=True)
-                if update.message:
-                    await update.message.reply_text("⚠️ Error al enviar parte de la ayuda. Probá /test")
-
+        texto = (
+            "🤖 <b>Guía de Secretar-IA</b>\n\n"
+            "📅 <b>Eventos (Google Calendar):</b>\n\n"
+            "  <i>\"Reunión el martes a las 15hs\"</i>\n"
+            "  <i>\"Cita dentista el 20/01 a las 10:30\"</i>\n"
+            "  <i>\"Clase yoga cada lunes a las 19hs\"</i> (recurrente)\n\n"
+            "⏰ <b>Recordatorios (alarmas locales):</b>\n\n"
+            "  <i>\"Recordame llamar a mamá a las 18hs\"</i>\n"
+            "  <i>\"Avisame tomar pastillas cada 8hs\"</i> (recurrente)\n\n"
+            "📔 <b>Notas (sin fecha):</b>\n\n"
+            "  <i>\"Anotá la clave wifi es 1234\"</i>\n"
+            "  <i>\"Idea: regalo para Ana - libro\"</i>\n\n"
+            "☑️ <b>Tareas diarias (lista con sub-items):</b>\n\n"
+            "  <i>\"Lista de hoy: estudiar lógica, preparar clases, limpiar\"</i>\n"
+            "  → Se crea una lista con checkboxes para tachar individualmente\n\n"
+            "🔧 <b>Gestión avanzada:</b>\n\n"
+            "  <i>\"Cambia la reunión al miércoles 16hs\"</i> (reagendar)\n"
+            "  <i>\"Borrar todo del 25 de octubre\"</i>\n"
+            "  <i>\"Deshacer\"</i> (borra último)\n\n"
+            "📋 <b>Comandos:</b>\n\n"
+            "  /resumen — Resumen matutino (eventos hoy/mañana + tareas)\n"
+            "  /pendientes — Ver tareas diarias con sub-items para tachar\n"
+            "  /notas — Consultar notas guardadas\n"
+            "  /hoy — Ver agenda de hoy\n"
+            "  /semana — Ver agenda de la semana\n"
+            "  /buscar <texto> — Buscar en notas/eventos\n"
+            "  /tag <etiqueta> — Filtrar por tag\n"
+            "  /ayuda — Esta guía\n"
+            "  /test — Diagnóstico del sistema\n\n"
+            "💡 <b>Tips:</b> Usá #tag para organizar. "
+            "Palabras clave: <i>urgente</i> (prioridad alta), "
+            "<i>no apura</i> (baja).\n"
+            "Para lista diaria: decí <i>\"Lista de hoy: ...\"</i> o <i>\"Tareas de hoy: ...\"</i>"
+        )
+        if update.message:
+            await update.message.reply_text(texto, parse_mode=ParseMode.HTML)
+        else:
+            logger.warning("ayuda_called_without_message")
     except Exception as e:
         logger.error("ayuda_error", error=str(e), exc_info=True)
         if update.message:
-            # Manejar error de Conflict específicamente
-            error_msg = str(e)
-            if "conflict" in error_msg.lower() or "conflict" in error_msg.lower():
-                await update.message.reply_text(
-                    "⚠️ <b>Conflict detectado</b>: Hay otra instancia del bot corriendo.\n"
-                    "Detén la instancia local o hacé <i>Clear build cache & deploy</i> en Render.",
-                    parse_mode=ParseMode.HTML
-                )
-            else:
-                await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
-
+            await update.message.reply_text("⚠️ Error al mostrar la ayuda. Probá /test")
 
 
 async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1372,8 +1346,25 @@ async def post_init(application: Application):
     hora_plantilla = datetime.time(hour=6, minute=30, tzinfo=ZONA_HORARIA)
     application.job_queue.run_daily(
         lambda ctx: weekly_planning_service.apply_daily_template(settings.mi_telegram_id),
-        time=hora_plantilla
+        time=hora_plantilla,
+        name="daily_template"
     )
+
+    # Comando manual para aplicar plantilla: /aplicar_plantilla
+    async def aplicar_plantilla(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await verificar_usuario(update):
+            return
+        task_id = await weekly_planning_service.apply_daily_template(settings.mi_telegram_id)
+        if task_id:
+            await update.message.reply_text(
+                f"✅ Plantilla diaria aplicada (Task ID: {task_id})",
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await update.message.reply_text(
+                "ℹ️ No hay plantilla activa o ya se aplicó hoy.",
+                parse_mode=ParseMode.HTML
+            )
 
     # Job diario a las 6:50 AM (resumen matutino)
     hora_envio = datetime.time(hour=6, minute=50, tzinfo=ZONA_HORARIA)
@@ -1431,6 +1422,8 @@ def main():
     app.add_handler(CommandHandler(["pendientes", "tareas"], ver_pendientes))
     # /plantillas, /planillas, /planilla (singular y plural)
     app.add_handler(CommandHandler(["plantillas", "planillas", "planilla"], ver_plantillas))
+    # /aplicar_plantilla - Aplicar plantilla diaria manualmente
+    app.add_handler(CommandHandler("aplicar_plantilla", aplicar_plantilla))
     # /objetivos, /metas, /meta (singular y plural)
     app.add_handler(CommandHandler(["objetivos", "metas", "meta"], ver_objetivos))
     app.add_handler(CommandHandler("revision", ver_revision))
