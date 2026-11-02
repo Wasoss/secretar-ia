@@ -1,7 +1,7 @@
 # Estado del Proyecto - Secretar-IA
 
 **Última actualización:** 2026-11-02
-**Commit actual:** 9c5a125 (main)
+**Commit actual:** ef37284 (main)
 
 ---
 
@@ -46,14 +46,24 @@ handlers/
 - **ai_service.py**: Fix crítico en `_parse_relative_date` - lógica faltante para aplicar patrones regex (definía patrones pero no los usaba)
 - **ai_service.py**: Nuevo método `_extract_datetime_from_match` para convertir grupos regex a datetime timezone-aware
 - **ai_service.py**: Agregados ejemplos "El miércoles 3/11 a las 12hs" y "El lunes 5/11 a las 10hs" al prompt
+- **ai_service.py**: **Fix crítico** en `_normalize_result` - bug en slicing `fh[:len(fmt)]` usaba longitud del string de formato (14) en vez de longitud esperada (16), causando fallos silenciosos de parsing
 - **Test results**: "el miercoles 3/11..." → 2026-11-03 00:00:00, "miercoles 3/11 a las 12:50hs..." → 2026-11-03 12:50:00
+
+### 5. Tests Unitarios (TDD) - 2026-11-02
+- **tests/unit/services/test_ai_service.py**: 18 tests para AIService
+  - 8 tests para `_parse_relative_date`: formatos "el miercoles 3/11", "miercoles 3/11 a las 12:50hs", "El miércoles 3/11 a las 12hs", "mañana 9hs", "hoy 15:30", "pasado mañana 10hs", "el 25/12 a las 10", "martes 12/11 a las 14hs"
+  - 9 tests para `_normalize_result`: manejo campos `fecha`/`fecha_hora`, prioridad clamping, tags cleaning, acción inválida
+  - 1 test skipped (integración con API real)
+  - **18 tests pasan** (1 skipped)
 
 ---
 
 ## 🔄 Pendiente / Por Hacer
 
 ### Prioridad Alta (Siguiente Sprint)
-- [ ] **Tests unitarios** para handlers, use cases, servicios
+- [x] **Tests unitarios** para AIService (18 tests pasan)
+- [ ] **Tests unitarios** para handlers (commands, messages, callbacks)
+- [ ] **Tests unitarios** para services (calendar, reminder, summary, weekly_planning)
 - [ ] **Capa de Use Cases** para separar lógica de negocio de framework Telegram
 - [ ] **Validación Pydantic** (DTOs) para inputs de handlers
 - [ ] **Patrón Outbox** para sincronización Calendar resiliente
@@ -83,6 +93,7 @@ handlers/
 | ~~Parsing de fechas "el miercoles 3/11" fallaba~~ | ~~Alta~~ | **Resuelto (9c5a125)** |
 | ~~IA devolvía campo `fecha` en vez de `fecha_hora`~~ | ~~Alta~~ | **Resuelto (9c5a125)** |
 | ~~_parse_relative_date no ejecutaba patrones regex~~ | ~~Crítica~~ | **Resuelto (9c5a125)** |
+| ~~Slicing `fh[:len(fmt)]` usaba longitud formato (14) vs esperada (16)~~ | ~~Crítica~~ | **Resuelto (ef37284)** |
 
 ---
 
