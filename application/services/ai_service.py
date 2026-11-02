@@ -199,6 +199,8 @@ Extraer #hashtags o palabras clave.
 "Recordame llamar a mamá mañana 10" → {{"accion":"RECORDATORIO","detalles":"Llamar a mamá","fecha_hora":"2025-01-15 10:00"}}
 "Reunión semana que viene 13hs" → {{"accion":"EVENTO","detalles":"Reunión","fecha_hora":"2025-01-20 13:00"}}
 "Mañana reunion con Joaquin 14hs" → {{"accion":"EVENTO","detalles":"reunion con Joaquin","fecha_hora":"2025-01-15 14:00"}}
+"El miércoles 3/11 a las 12hs entrega de examenes" → {{"accion":"EVENTO","detalles":"entrega de examenes","fecha_hora":"2025-11-03 12:00"}}
+"El lunes 5/11 a las 10hs reunión" → {{"accion":"EVENTO","detalles":"reunión","fecha_hora":"2025-11-05 10:00"}}
 """.strip()
 
 
@@ -424,7 +426,7 @@ class AIService:
         now = datetime.now(settings.tz)
         hoy = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs", "miercoles a las 12:50", "miercoles 3 a las 12hs", "miercoles 3/11 a las 12hs", "miercoles 3 a las 12hs"
+        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs", "miercoles a las 12:50", "miercoles 3 a las 12hs", "miercoles 3/11 a las 12hs", "miercoles 3 a las 12hs", "El miércoles 3/11 a las 12hs"
         patterns = [
             # "mañana 9hs", "mañana 9am", "mañana 9:30", "mañana reunion 14hs", "mañana a las 14hs"
             (r'(?:mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
@@ -436,6 +438,8 @@ class AIService:
             (r'(?:la\s+)?(?:semana\s+que\s+viene|pr[oó]xima\s+semana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 7),
             # "el 25/12 a las 10", "el 25/12 10hs"
             (r'el\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
+            # "El miércoles 3/11 a las 12hs", "El lunes 5/11 a las 10hs", "El viernes 20/11 a las 14hs"
+            (r'el\s+(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
             # "martes 12/11", "martes 12/11 a las 14hs", "martes 12/11 14hs", "martes 12/11 a las 14hs"
             (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
             # "miercoles a las 12:50", "lunes a las 10", "viernes 14hs"
