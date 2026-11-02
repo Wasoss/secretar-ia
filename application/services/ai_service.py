@@ -424,7 +424,7 @@ class AIService:
         now = datetime.now(settings.tz)
         hoy = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10"
+        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs"
         patterns = [
             # "mañana 9hs", "mañana 9am", "mañana 9:30", "mañana reunion 14hs", "mañana a las 14hs"
             (r'(?:mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
@@ -436,6 +436,8 @@ class AIService:
             (r'(?:la\s+)?(?:semana\s+que\s+viene|pr[oó]xima\s+semana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 7),
             # "el 25/12 a las 10", "el 25/12 10hs"
             (r'el\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
+            # "martes 12/11", "martes 12/11 a las 14hs", "martes 12/11 14hs", "martes 12/11 a las 14hs"
+            (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
         ]
 
         for pattern, day_offset in patterns:
@@ -450,7 +452,7 @@ class AIService:
                         ampm = match.group(3) if len(match.groups()) >= 3 else None
                         base_date = hoy + timedelta(days=day_offset)
                     else:
-                        # el DD/MM: group(1)=day, group(2)=month, group(3)=hour, group(4)=min, group(5)=ampm
+                        # el DD/MM o día_semana DD/MM: group(1)=day, group(2)=month, group(3)=hour, group(4)=min, group(5)=ampm
                         day = int(match.group(1))
                         month = int(match.group(2))
                         year = now.year
