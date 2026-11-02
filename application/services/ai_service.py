@@ -64,6 +64,7 @@ class ParsedIntent:
     detalles: str
     fecha_hora: Optional[datetime.datetime]
     recurrencia: Optional[str] = None  # RRULE string
+    duracion: Optional[int] = None  # Duración en minutos (ej: 60, 30, 90)
     prioridad: int = 0  # 0=normal, 1=alta, -1=baja
     tags: List[str] = None
     tarea_original_id: Optional[int] = None  # Para REAGENDAR
@@ -71,6 +72,8 @@ class ParsedIntent:
     # Campos para objetivos
     objetivo_valor: Optional[float] = None
     objetivo_unidad: Optional[str] = None
+    # Detección de conflictos
+    conflicto_posible: Optional[str] = None
 
     def __post_init__(self):
         if self.tags is None:
@@ -82,12 +85,14 @@ class ParsedIntent:
             "detalles": self.detalles,
             "fecha_hora": self.fecha_hora.isoformat() if self.fecha_hora else None,
             "recurrencia": self.recurrencia,
+            "duracion": self.duracion,
             "prioridad": self.prioridad,
             "tags": self.tags,
             "tarea_original_id": self.tarea_original_id,
             "confianza": self.confianza,
             "objetivo_valor": self.objetivo_valor,
             "objetivo_unidad": self.objetivo_unidad,
+            "conflicto_posible": self.conflicto_posible,
         }
 
 
@@ -149,6 +154,12 @@ hoy, mañana, pasado mañana, próximo [día], este [día], el DD/MM, fin de sem
 "días hábiles" → FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR
 "fines de semana" → FREQ=WEEKLY;BYDAY=SA,SU
 
+=== DURACIÓN DE EVENTOS (extraer de texto) ===
+"reunión 2hs", "reunión 2h", "reunión de 2 horas" → duracion: 2 horas (end_dt = inicio + 2h)
+"cita 30min", "cita 30m", "cita media hora" → duracion: 30 min
+"evento 1h30", "evento 1h30m" → duracion: 1h30m
+Default: 1 hora si no se especifica
+
 === PRIORIDAD ===
 urgente/importante/crítico/ya → 1
 cuando puedas/no apura/baja → -1
@@ -157,18 +168,28 @@ Default → 0
 === TAGS ===
 Extraer #hashtags o palabras clave.
 
+=== DETECCIÓN DE CONFLICTOS (IA) ===
+Si el usuario pide un evento en un horario, la IA debe inferir si puede haber conflicto basándose en:
+- Horarios típicos de trabajo (9-18hs)
+- Eventos recurrentes típicos (ej: "clase de inglés todos los miércoles 19hs")
+- Eventos mencionados en contexto reciente
+Si detecta posible conflicto, DEBE avisar en el campo "conflicto_posible": "posible conflicto con [evento] a las HH:MM"
+
 === JSON OBLIGATORIO ===
 {{
   "accion": "EVENTO|RECORDATORIO|NOTA|RECHAZADO_GASTOS|CONVERSACION|AYUDA|DESHACER|ELIMINAR_FECHA|REAGENDAR|LISTAR|BUSCAR|TAREA_DIARIA|PLANTILLA_CREAR|PLANTILLA_LISTAR|PLANTILLA_ACTIVAR|OBJETIVO_CREAR|OBJETIVO_LISTAR|OBJETIVO_PROGRESO|REVISION_SEMANAL|ERROR",
   "detalles": "Resumen accionable (TAREA_DIARIA: items por comas; OBJETIVO_CREAR: desc + valor + unidad)",
   "fecha_hora": "YYYY-MM-DD HH:MM o null (TAREA_DIARIA/PLANTILLA_CREAR/OBJETIVO_CREAR/REVISION_SEMANAL/AYUDA → null)",
   "recurrencia": "RRULE o null",
+  "duracion": "duración en minutos (ej: 60, 30, 90, 120) o null si default 60",
+  "recurrencia": "RRULE o null",
   "prioridad": -1|0|1,
   "tags": ["tag1"],
   "tarea_original_id": null,
   "confianza": 0.0-1.0,
   "objetivo_valor": null,
-  "objetivo_unidad": null
+  "objetivo_unidad": null,
+  "conflicto_posible": "string o null si detecta posible conflicto"
 }}
 
 === EJEMPLOS ===
@@ -356,7 +377,17 @@ class AIService:
         if fecha_hora is None and original_text:
             fecha_hora = self._parse_relative_date(original_text)
 
-        # Recurrencia
+        # Duración - FALLBACK: Si la IA no devolvió duración, intentar extraer del texto original
+        duracion = result.get("duracion")
+        if duracion is None and original_text:
+            duracion = self._extract_duration_from_text(original_text)
+        elif duracion is not None:
+            try:
+                duracion = int(duracion)
+                if duracion <= 0:
+                    duracion = None
+            except (ValueError, TypeError):
+                duracion = None
         recurrencia = result.get("recurrencia")
         if recurrencia and str(recurrencia).lower() == "null":
             recurrencia = None
@@ -401,17 +432,34 @@ class AIService:
             confianza = 1.0
         confianza = max(0.0, min(1.0, float(confianza)))
 
+        # Duración (nuevo campo)
+        duracion = result.get("duracion")
+        if duracion is not None:
+            try:
+                duracion = int(duracion)
+                if duracion <= 0:
+                    duracion = None
+            except (ValueError, TypeError):
+                duracion = None
+
+        # Conflicto posible (nuevo campo)
+        conflicto_posible = result.get("conflicto_posible")
+        if conflicto_posible and str(conflicto_posible).lower() == "null":
+            conflicto_posible = None
+
         return ParsedIntent(
             accion=accion,
             detalles=detalles,
             fecha_hora=fecha_hora,
             recurrencia=recurrencia,
+            duracion=duracion,
             prioridad=prioridad,
             tags=tags,
             tarea_original_id=tarea_original_id,
             confianza=confianza,
             objetivo_valor=objetivo_valor,
-            objetivo_unidad=objetivo_unidad
+            objetivo_unidad=objetivo_unidad,
+            conflicto_posible=conflicto_posible
         )
 
     def _parse_relative_date(self, text: str) -> Optional[datetime.datetime]:
@@ -614,3 +662,47 @@ Si no hay nada útil, respondé "NINGUNA".
         except Exception as e:
             logger.error("proactive_suggestion_failed", error=str(e))
             return None
+
+    def _extract_duration_from_text(self, text: str) -> Optional[int]:
+        """
+        Extrae duración en minutos del texto original.
+        Soporta: "reunión 2hs", "reunión 2h", "reunión 2hs", "cita 30min",
+        "cita 30min", "cita 30m", "media hora", "1h30", "1h30m", "1h 30m"
+
+        Returns:
+            Duración en minutos o None si no se detecta
+        """
+        import re
+        text_lower = text.lower()
+
+        # Patrones para duración
+        # "reunión 2hs", "reunión 2h", "reunión 2hs", "reunión de 2 horas"
+        # "cita 30min", "cita 30min", "cita 30m", "30min", "30m"
+        # "1h30", "1h30m", "1h 30m", "1h 30"
+        # "media hora" = 30 min
+        # "una hora" = 60 min
+
+        duration_patterns = [
+            # "2hs", "2h", "2hs" -> hours
+            (r'(\d+(?:\.\d+)?)\s*(?:hs?|horas?)(?!\w)', lambda m: int(float(m.group(1)) * 60)),
+            # "30min", "30min", "30m", "30m" -> minutes
+            (r'(\d+)\s*(?:min(?:utos?)?|m)(?!\w)', lambda m: int(m.group(1))),
+            # "1h30", "1h30m", "1h 30m", "1h 30" -> hours + minutes
+            (r'(\d+)h\s*(\d{1,2})m?', lambda m: int(m.group(1)) * 60 + int(m.group(2))),
+            # "1h30" (sin m final)
+            (r'(\d+)h(\d{2})(?!\d)', lambda m: int(m.group(1)) * 60 + int(m.group(2))),
+            # "media hora" -> 30
+            (r'media\s+hora', lambda m: 30),
+            # "una hora", "1 hora" -> 60
+            (r'(?:una|1)\s+hora', lambda m: 60),
+        ]
+
+        for pattern, extractor in duration_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    return extractor(match)
+                except Exception:
+                    continue
+
+        return None
