@@ -1,7 +1,7 @@
 # Estado del Proyecto - Secretar-IA
 
 **Última actualización:** 2026-11-02
-**Commit actual:** a26c0cf (main)
+**Commit actual:** 9c5a125 (main)
 
 ---
 
@@ -42,6 +42,11 @@ handlers/
 ### 4. Fix: Parsing de fechas "El miércoles 3/11 a las 12hs" (2026-11-02)
 - **ai_service.py**: Agregados ejemplos al prompt del sistema
 - **ai_service.py**: Agregado patrón regex fallback para "El [día] DD/MM a las HH"
+- **ai_service.py**: Fix crítico en `_normalize_result` - maneja tanto `fecha` como `fecha_hora` (algunos modelos devuelven campo abreviado)
+- **ai_service.py**: Fix crítico en `_parse_relative_date` - lógica faltante para aplicar patrones regex (definía patrones pero no los usaba)
+- **ai_service.py**: Nuevo método `_extract_datetime_from_match` para convertir grupos regex a datetime timezone-aware
+- **ai_service.py**: Agregados ejemplos "El miércoles 3/11 a las 12hs" y "El lunes 5/11 a las 10hs" al prompt
+- **Test results**: "el miercoles 3/11..." → 2026-11-03 00:00:00, "miercoles 3/11 a las 12:50hs..." → 2026-11-03 12:50:00
 
 ---
 
@@ -75,6 +80,9 @@ handlers/
 | Manejo de errores Calendar no distingue todos los códigos HTTP | Baja | Pendiente |
 | Conversation history en memoria (se pierde al restart) | Baja | Pendiente |
 | No hay retry/backoff configurable para Groq API | Media | Pendiente |
+| ~~Parsing de fechas "el miercoles 3/11" fallaba~~ | ~~Alta~~ | **Resuelto (9c5a125)** |
+| ~~IA devolvía campo `fecha` en vez de `fecha_hora`~~ | ~~Alta~~ | **Resuelto (9c5a125)** |
+| ~~_parse_relative_date no ejecutaba patrones regex~~ | ~~Crítica~~ | **Resuelto (9c5a125)** |
 
 ---
 
