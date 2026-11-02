@@ -5,7 +5,7 @@ from .base import BaseHandler, handle_errors, require_auth, HandlerError, Authen
 from .commands import (
     start, ajuda, status, ping, test_sistema,
     calendar_status,
-    ver_notas, ver_hoy, ver_semana, buscar, filtrar_tag, ver_pendientes,
+    ver_notas, ver_hoy, ver_hoy_corto, ver_semana, buscar, filtrar_tag, ver_pendientes,
     ver_plantillas, ver_objetivos, ver_revision,
 )
 from .messages import recibir_texto, recibir_audio
@@ -30,6 +30,7 @@ __all__ = [
     'calendar_status',
     'ver_notas',
     'ver_hoy',
+    'ver_hoy_corto',
     'ver_semana',
     'buscar',
     'filtrar_tag',

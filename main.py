@@ -23,7 +23,7 @@ from handlers import (
     # Calendar commands
     calendar_status,
     # Agenda commands
-    ver_notas, ver_hoy, ver_semana, buscar, filtrar_tag, ver_pendientes,
+    ver_notas, ver_hoy, ver_hoy_corto, ver_semana, buscar, filtrar_tag, ver_pendientes,
     # Template commands
     ver_plantillas,
     # Objective/Review commands
@@ -209,6 +209,7 @@ def main():
     app.add_handler(CommandHandler("calendar_status", calendar_status))
     app.add_handler(CommandHandler("notas", ver_notas))
     app.add_handler(CommandHandler("hoy", ver_hoy))
+    app.add_handler(CommandHandler("hoy_corto", ver_hoy_corto))
     app.add_handler(CommandHandler("semana", ver_semana))
     app.add_handler(CommandHandler("buscar", buscar))
     app.add_handler(CommandHandler("tag", filtrar_tag))
