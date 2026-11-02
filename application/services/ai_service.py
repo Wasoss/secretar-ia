@@ -424,7 +424,7 @@ class AIService:
         now = datetime.now(settings.tz)
         hoy = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs"
+        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs", "miercoles a las 12:50"
         patterns = [
             # "mañana 9hs", "mañana 9am", "mañana 9:30", "mañana reunion 14hs", "mañana a las 14hs"
             (r'(?:mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
@@ -438,6 +438,8 @@ class AIService:
             (r'el\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
             # "martes 12/11", "martes 12/11 a las 14hs", "martes 12/11 14hs", "martes 12/11 a las 14hs"
             (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
+            # "miercoles a las 12:50", "lunes a las 10", "viernes 14hs"
+            (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)', None),
         ]
 
         for pattern, day_offset in patterns:

@@ -1422,8 +1422,6 @@ def main():
     app.add_handler(CommandHandler(["pendientes", "tareas"], ver_pendientes))
     # /plantillas, /planillas, /planilla (singular y plural)
     app.add_handler(CommandHandler(["plantillas", "planillas", "planilla"], ver_plantillas))
-    # /aplicar_plantilla - Aplicar plantilla diaria manualmente
-    app.add_handler(CommandHandler("aplicar_plantilla", aplicar_plantilla))
     # /objetivos, /metas, /meta (singular y plural)
     app.add_handler(CommandHandler(["objetivos", "metas", "meta"], ver_objetivos))
     app.add_handler(CommandHandler("revision", ver_revision))
