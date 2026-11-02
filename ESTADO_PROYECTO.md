@@ -97,7 +97,20 @@ handlers/
   - Guardado local simple
   - Orden: solo save BD (sin sync externo)
   - **5 tests pasan**
-- **Total tests**: 34 pasan (18 AIService + 6 CreateEventUseCase + 5 CreateReminderUseCase + 5 CreateNoteUseCase, 1 skipped)
+- **application/use_cases/create_daily_task.py**: CreateDailyTaskUseCase
+  - Orquesta TaskRepository (sin CalendarService, sin ReminderService)
+  - Parseo de subtareas: comas, "y", saltos de línea, punto y coma
+  - Validación: TAREA_DIARIA no requiere fecha/hora
+  - Persistencia local con subtareas JSON
+  - No va a Calendar, no programa alarma
+- **tests/unit/use_cases/test_create_daily_task.py**: 6 tests
+  - Éxito creación lista diaria con subtareas
+  - Separadores: comas, "y", saltos de línea, punto y coma
+  - Sin sync Calendar (validación)
+  - Guardado local solo BD
+  - Orden garantizado: solo save BD
+  - **6 tests pasan**
+- **Total tests**: 40 pasan (18 AIService + 6 CreateEventUseCase + 5 CreateReminderUseCase + 5 CreateNoteUseCase + 6 CreateDailyTaskUseCase, 1 skipped)
 
 ---
 
@@ -108,12 +121,13 @@ handlers/
 - [x] **Tests unitarios** para CreateEventUseCase (6 tests pasan)
 - [x] **Tests unitarios** para CreateReminderUseCase (5 tests pasan)
 - [x] **Tests unitarios** para CreateNoteUseCase (5 tests pasan)
+- [x] **Tests unitarios** para CreateDailyTaskUseCase (6 tests pasan)
 - [ ] **Tests unitarios** para handlers (commands, messages, callbacks)
 - [ ] **Tests unitarios** para services (calendar, reminder, summary, weekly_planning)
 - [x] **Capa de Use Cases** - CreateEventUseCase completado
 - [x] **Capa de Use Cases** - CreateReminderUseCase completado
 - [x] **Capa de Use Cases** - CreateNoteUseCase completado
-- [ ] **Capa de Use Cases** - CreateDailyTaskUseCase
+- [x] **Capa de Use Cases** - CreateDailyTaskUseCase completado
 - [ ] **Capa de Use Cases** - RescheduleTaskUseCase, DeleteTaskUseCase, CompleteTaskUseCase
 - [ ] **Capa de Use Cases** - ListAgendaUseCase, SearchTasksUseCase
 - [ ] **Capa de Use Cases** - ManageTemplateUseCase, ManageObjectiveUseCase

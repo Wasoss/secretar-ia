@@ -8,7 +8,7 @@ from telegram.constants import ParseMode
 from handlers.base import BaseHandler, handle_errors
 from config.settings import settings
 from config.logging import get_logger
-from utils.formatters import format_daily_task
+from utils.formatters import format_daily_task, truncate
 
 logger = get_logger(__name__)
 
@@ -34,7 +34,13 @@ class CompletionCallbackHandler(BaseHandler):
             await self._handle_complete(query, data, task_repo)
 
         elif data.startswith("delete_"):
-            await self._handle_delete(query, data, task_repo, calendar_service)
+            # delete_123 -> mostrar confirmación
+            if data.startswith("confirm_delete_"):
+                await self._handle_confirm_delete(query, data, task_repo, calendar_service)
+            elif data.startswith("cancel_delete_"):
+                await self._handle_cancel_delete(query, data)
+            else:
+                await self._handle_delete_confirmation(query, data, task_repo)
 
         elif data.startswith("subtask_"):
             await self._handle_subtask(query, data, task_repo)
@@ -54,14 +60,48 @@ class CompletionCallbackHandler(BaseHandler):
         else:
             await query.edit_message_text(text="¡Todas las tareas de esta lista están listas! 🎉")
 
-    async def _handle_delete(self, query, data: str, task_repo, calendar_service):
-        """Handle delete_ callback."""
+    async def _handle_delete_confirmation(self, query, data: str, task_repo):
+        """Show delete confirmation with Yes/No buttons."""
         task_id = int(data.split("_")[1])
         task = await task_repo.get_task_by_id(task_id)
+
+        if not task:
+            await query.answer("❌ Tarea no encontrada")
+            return
+
+        # Mostrar confirmación
+        titulo = truncate(task.detalles, 30)
+        mensaje = f"🗑️ <b>¿Eliminar?</b>\n\n<b>{titulo}</b>\n\n¿Estás seguro?"
+
+        botones = [
+            [
+                InlineKeyboardButton("✅ Sí, eliminar", callback_data=f"confirm_delete_{task_id}"),
+                InlineKeyboardButton("❌ No, cancelar", callback_data=f"cancel_delete_{task_id}"),
+            ]
+        ]
+
+        await query.edit_message_text(
+            text=mensaje,
+            reply_markup=InlineKeyboardMarkup(botones),
+            parse_mode=ParseMode.HTML
+        )
+
+    async def _handle_confirm_delete(self, query, data: str, task_repo, calendar_service):
+        """Handle confirmed delete."""
+        task_id = int(data.split("_")[2])  # confirm_delete_123
+        task = await task_repo.get_task_by_id(task_id)
+
         if task and task.calendar_event_id:
             await calendar_service.delete_event(task.calendar_event_id)
         await task_repo.delete_by_id(task_id)
+
         await query.answer("🗑️ Eliminada")
+        await query.edit_message_text(text="🗑️ Eliminada")
+
+    async def _handle_cancel_delete(self, query, data: str):
+        """Handle cancel delete."""
+        await query.answer("Cancelado")
+        await query.edit_message_text(text="❌ Cancelado")
 
     async def _handle_subtask(self, query, data: str, task_repo):
         """Handle subtask_ callback."""
