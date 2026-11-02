@@ -333,9 +333,9 @@ class AIService:
         if not detalles:
             detalles = "Sin detalles"
 
-        # Fecha/hora
+        # Fecha/hora - manejar tanto "fecha_hora" como "fecha" (algunos modelos usan abreviación)
         fecha_hora = None
-        fh = result.get("fecha_hora")
+        fh = result.get("fecha_hora") or result.get("fecha")
         if fh and str(fh).lower() != "null":
             try:
                 # Parsear como naive y agregar timezone
@@ -449,6 +449,81 @@ class AIService:
             # "miercoles 3/11 a las 12hs", "lunes 5/11 a las 10"
             (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
         ]
+
+        # Aplicar patrones en orden
+        for pattern, day_offset in patterns:
+            match = re.search(pattern, text_lower, re.IGNORECASE)
+            if match:
+                groups = match.groups()
+                try:
+                    fecha_hora = self._extract_datetime_from_match(groups, day_offset, hoy)
+                    if fecha_hora:
+                        return fecha_hora
+                except Exception:
+                    continue
+
+        return None
+
+    def _extract_datetime_from_match(self, groups, day_offset, hoy):
+        """
+        Extrae datetime a partir de los grupos de regex capturados.
+
+        Args:
+            groups: Tupla con los grupos capturados por el regex
+            day_offset: Offset en días desde hoy (None si se usa día específico)
+            hoy: datetime de hoy a medianoche
+
+        Returns:
+            datetime.datetime o None
+        """
+        from datetime import datetime, timedelta
+
+        if day_offset is not None:
+            # Patrones relativos: mañana, hoy, pasado mañana, semana que viene
+            base_date = hoy + timedelta(days=day_offset)
+            if len(groups) >= 1 and groups[0]:
+                hour = int(groups[0])
+                minute = int(groups[1]) if len(groups) > 1 and groups[1] else 0
+                # Manejar am/pm
+                if len(groups) > 2 and groups[2]:
+                    suffix = groups[2].lower()
+                    if suffix in ('pm', 'p') and hour < 12:
+                        hour += 12
+                    elif suffix in ('am', 'a') and hour == 12:
+                        hour = 0
+                return base_date.replace(hour=hour, minute=minute)
+        else:
+            # Patrones con día específico: "el 25/12", "martes 12/11", "El miércoles 3/11", etc.
+            # Groups puede ser: (DD, MM, HH?, MM?, suffix?)
+            # o: (day_num, month_num, HH?, MM?, suffix?) para "El miércoles 3/11"
+            if len(groups) >= 2 and groups[0] and groups[1]:
+                day = int(groups[0])
+                month = int(groups[1])
+                year = hoy.year
+                # Si el mes ya pasó este año, asumir próximo año
+                if month < hoy.month or (month == hoy.month and day < hoy.day):
+                    year += 1
+
+                hour = 0
+                minute = 0
+                if len(groups) > 2 and groups[2]:
+                    hour = int(groups[2])
+                if len(groups) > 3 and groups[3]:
+                    minute = int(groups[3])
+                # Manejar am/pm
+                if len(groups) > 4 and groups[4]:
+                    suffix = groups[4].lower()
+                    if suffix in ('pm', 'p') and hour < 12:
+                        hour += 12
+                    elif suffix in ('am', 'a') and hour == 12:
+                        hour = 0
+
+                try:
+                    return datetime(year, month, day, hour, minute, tzinfo=settings.tz)
+                except ValueError:
+                    pass
+
+        return None
 
     async def transcribe_audio(self, audio_path: str) -> Optional[str]:
         """
