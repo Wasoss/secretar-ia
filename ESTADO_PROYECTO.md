@@ -1,7 +1,7 @@
 # Estado del Proyecto - Secretar-IA
 
 **Última actualización:** 2026-11-02
-**Commit actual:** ef37284 (main)
+**Commit actual:** 2861d3a (main)
 
 ---
 
@@ -56,15 +56,39 @@ handlers/
   - 1 test skipped (integración con API real)
   - **18 tests pasan** (1 skipped)
 
+### 6. Capa de Use Cases (TDD) - 2026-11-02
+- **application/use_cases/create_event.py**: CreateEventUseCase
+  - Orquesta TaskRepository + CalendarService
+  - Validación: EVENTO requiere fecha/hora
+  - Persistencia local primero (garantiza BD) → luego sync Calendar
+  - Manejo conflictos Calendar (warning, no bloquea)
+  - Resilencia: fallos Calendar no bloquean guardado local
+  - Soporta recurrencia (RRULE)
+  - Orden garantizado: save BD → sync Calendar
+- **tests/unit/use_cases/test_create_event.py**: 6 tests
+  - Éxito con sync Calendar
+  - Fallo sin fecha/hora
+  - Warning por conflicto Calendar
+  - Resilencia: fallo sync Calendar (token expirado)
+  - Soporte recurrencia (RRULE)
+  - Orden garantizado: save BD antes que sync Calendar
+  - **6 tests pasan**
+- **Total tests**: 24 pasan (18 AIService + 6 CreateEventUseCase, 1 skipped)
+
 ---
 
 ## 🔄 Pendiente / Por Hacer
 
 ### Prioridad Alta (Siguiente Sprint)
 - [x] **Tests unitarios** para AIService (18 tests pasan)
+- [x] **Tests unitarios** para CreateEventUseCase (6 tests pasan)
 - [ ] **Tests unitarios** para handlers (commands, messages, callbacks)
 - [ ] **Tests unitarios** para services (calendar, reminder, summary, weekly_planning)
-- [ ] **Capa de Use Cases** para separar lógica de negocio de framework Telegram
+- [x] **Capa de Use Cases** - CreateEventUseCase completado
+- [ ] **Capa de Use Cases** - CreateReminderUseCase, CreateNoteUseCase, CreateDailyTaskUseCase
+- [ ] **Capa de Use Cases** - RescheduleTaskUseCase, DeleteTaskUseCase, CompleteTaskUseCase
+- [ ] **Capa de Use Cases** - ListAgendaUseCase, SearchTasksUseCase
+- [ ] **Capa de Use Cases** - ManageTemplateUseCase, ManageObjectiveUseCase
 - [ ] **Validación Pydantic** (DTOs) para inputs de handlers
 - [ ] **Patrón Outbox** para sincronización Calendar resiliente
 
@@ -94,6 +118,7 @@ handlers/
 | ~~IA devolvía campo `fecha` en vez de `fecha_hora`~~ | ~~Alta~~ | **Resuelto (9c5a125)** |
 | ~~_parse_relative_date no ejecutaba patrones regex~~ | ~~Crítica~~ | **Resuelto (9c5a125)** |
 | ~~Slicing `fh[:len(fmt)]` usaba longitud formato (14) vs esperada (16)~~ | ~~Crítica~~ | **Resuelto (ef37284)** |
+| ~~CreateEventUseCase no existía (lógica en handlers)~~ | ~~Alta~~ | **Resuelto (2861d3a)** |
 
 ---
 
