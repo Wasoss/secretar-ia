@@ -340,10 +340,10 @@ class AIService:
             try:
                 # Parsear como naive y agregar timezone
                 if isinstance(fh, str):
-                    # Intentar varios formatos
+                    # Intentar varios formatos (sin slicing - strptime maneja string completo)
                     for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"]:
                         try:
-                            fecha_hora = datetime.datetime.strptime(fh[:len(fmt)], fmt)
+                            fecha_hora = datetime.datetime.strptime(fh, fmt)
                             if fecha_hora.tzinfo is None:
                                 fecha_hora = fecha_hora.replace(tzinfo=settings.tz)
                             break
