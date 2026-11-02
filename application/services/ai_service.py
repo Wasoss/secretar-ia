@@ -424,7 +424,7 @@ class AIService:
         now = datetime.now(settings.tz)
         hoy = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs", "miercoles a las 12:50"
+        # Patrones flexibles: "mañana 9hs", "mañana a las 9", "mañana reunion 14hs", "semana que viene 10hs", "el 25/12 a las 10", "martes 12/11", "martes 12/11 a las 14hs", "miercoles a las 12:50", "miercoles 3 a las 12hs", "miercoles 3/11 a las 12hs", "miercoles 3 a las 12hs"
         patterns = [
             # "mañana 9hs", "mañana 9am", "mañana 9:30", "mañana reunion 14hs", "mañana a las 14hs"
             (r'(?:mañana)\b.*?(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?', 1),
@@ -440,51 +440,11 @@ class AIService:
             (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
             # "miercoles a las 12:50", "lunes a las 10", "viernes 14hs"
             (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)', None),
+            # "miercoles 3 a las 12hs", "lunes 5 a las 10", "viernes 20 a las 14hs"
+            (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)', None),
+            # "miercoles 3/11 a las 12hs", "lunes 5/11 a las 10"
+            (r'(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[áa]bado|domingo)\s+(\d{1,2})/(\d{1,2})(?:\s+(?:a\s+las\s+|a\s+)(\d{1,2})(?::(\d{2}))?\s*(hs?|am|pm)?)?', None),
         ]
-
-        for pattern, day_offset in patterns:
-            match = re.search(pattern, text.lower())
-            if match:
-                try:
-                    # Patrones con day_offset (mañana, hoy, pasado mañana, semana que viene)
-                    if day_offset is not None:
-                        # Todas estas tienen: group(1)=hora, group(2)=minutos, group(3)=ampm
-                        hour = int(match.group(1))
-                        minute = int(match.group(2)) if match.group(2) else 0
-                        ampm = match.group(3) if len(match.groups()) >= 3 else None
-                        base_date = hoy + timedelta(days=day_offset)
-                    else:
-                        # el DD/MM o día_semana DD/MM: group(1)=day, group(2)=month, group(3)=hour, group(4)=min, group(5)=ampm
-                        day = int(match.group(1))
-                        month = int(match.group(2))
-                        year = now.year
-                        try:
-                            test_date = datetime(year, month, day)
-                            if test_date < now:
-                                year += 1
-                        except ValueError:
-                            continue
-                        base_date = datetime(year, month, day)
-                        hour = int(match.group(3)) if match.group(3) else 0
-                        minute = int(match.group(4)) if match.group(4) else 0
-                        ampm = match.group(5) if len(match.groups()) >= 5 else None
-
-                    # Manejar AM/PM
-                    if ampm and 'pm' in ampm and hour < 12:
-                        hour += 12
-                    elif ampm and 'am' in ampm and hour == 12:
-                        hour = 0
-
-                    # Validar hora
-                    if 0 <= hour <= 23 and 0 <= minute <= 59:
-                        dt = base_date.replace(hour=hour, minute=minute, tzinfo=settings.tz)
-                        logger.debug("relative_date_parsed", text=text, result=dt.isoformat())
-                        return dt
-
-                except (ValueError, IndexError, AttributeError):
-                    continue
-
-        return None
 
     async def transcribe_audio(self, audio_path: str) -> Optional[str]:
         """
