@@ -1,7 +1,7 @@
 # Estado del Proyecto - Secretar-IA
 
 **Última actualización:** 2026-11-02
-**Commit actual:** 2861d3a (main)
+**Commit actual:** (pending - to be updated after push)
 
 ---
 
@@ -73,7 +73,19 @@ handlers/
   - Soporte recurrencia (RRULE)
   - Orden garantizado: save BD antes que sync Calendar
   - **6 tests pasan**
-- **Total tests**: 24 pasan (18 AIService + 6 CreateEventUseCase, 1 skipped)
+- **application/use_cases/create_reminder.py**: CreateReminderUseCase
+  - Orquesta TaskRepository + ReminderService
+  - Validación: RECORDATORIO requiere fecha/hora
+  - Persistencia local primero (garantiza BD) → luego programa alarma
+  - Resilencia: fallos alarma no bloquean guardado local
+  - Soporta job_queue para programación asíncrona
+- **tests/unit/use_cases/test_create_reminder.py**: 5 tests
+  - Éxito con programación de alarma
+  - Fallo sin fecha/hora
+  - Fallo de programación alarma (fecha pasada)
+  - Orden garantizado: save BD antes que programar alarma
+  - **5 tests pasan**
+- **Total tests**: 29 pasan (18 AIService + 6 CreateEventUseCase + 5 CreateReminderUseCase, 1 skipped)
 
 ---
 
@@ -82,10 +94,12 @@ handlers/
 ### Prioridad Alta (Siguiente Sprint)
 - [x] **Tests unitarios** para AIService (18 tests pasan)
 - [x] **Tests unitarios** para CreateEventUseCase (6 tests pasan)
+- [x] **Tests unitarios** para CreateReminderUseCase (5 tests pasan)
 - [ ] **Tests unitarios** para handlers (commands, messages, callbacks)
 - [ ] **Tests unitarios** para services (calendar, reminder, summary, weekly_planning)
 - [x] **Capa de Use Cases** - CreateEventUseCase completado
-- [ ] **Capa de Use Cases** - CreateReminderUseCase, CreateNoteUseCase, CreateDailyTaskUseCase
+- [x] **Capa de Use Cases** - CreateReminderUseCase completado
+- [ ] **Capa de Use Cases** - CreateNoteUseCase, CreateDailyTaskUseCase
 - [ ] **Capa de Use Cases** - RescheduleTaskUseCase, DeleteTaskUseCase, CompleteTaskUseCase
 - [ ] **Capa de Use Cases** - ListAgendaUseCase, SearchTasksUseCase
 - [ ] **Capa de Use Cases** - ManageTemplateUseCase, ManageObjectiveUseCase
@@ -119,6 +133,7 @@ handlers/
 | ~~_parse_relative_date no ejecutaba patrones regex~~ | ~~Crítica~~ | **Resuelto (9c5a125)** |
 | ~~Slicing `fh[:len(fmt)]` usaba longitud formato (14) vs esperada (16)~~ | ~~Crítica~~ | **Resuelto (ef37284)** |
 | ~~CreateEventUseCase no existía (lógica en handlers)~~ | ~~Alta~~ | **Resuelto (2861d3a)** |
+| ~~CreateReminderUseCase no existía (lógica en handlers)~~ | ~~Alta~~ | **Resuelto** |
 
 ---
 
