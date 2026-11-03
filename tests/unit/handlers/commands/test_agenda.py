@@ -4,7 +4,7 @@ Tests for agenda command handlers - TDD approach.
 Following TDD: write failing test first, then implement minimal code to pass.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -36,6 +36,8 @@ def mock_context():
     context = AsyncMock()
     context.job_queue = AsyncMock()
     context.args = []
+    context.bot = AsyncMock()
+    context.bot.send_message = AsyncMock()
     return context
 
 @pytest.fixture
@@ -47,7 +49,7 @@ def mock_services():
     return mock_task_repo, mock_calendar, AsyncMock()
 
 @pytest.fixture
-def handler(mock_services):
+def handler(mock_services, mock_context):
     """Create handler instance with mocked services."""
     from handlers.commands.agenda import AgendaCommandsHandler
     handler = AgendaCommandsHandler()
@@ -57,6 +59,10 @@ def handler(mock_services):
         'calendar_service': mock_services[1],
         'summary_service': mock_services[2],
     })
+    # Make summary_service.send_custom_summary call context.bot.send_message
+    async def mock_send_custom_summary(bot, chat_id, tasks, events, title):
+        await mock_context.bot.send_message(chat_id=chat_id, text=f"MOCK: {title}")
+    mock_services[2].send_custom_summary.side_effect = mock_send_custom_summary
     return handler
 
 
@@ -131,8 +137,8 @@ class TestAgendaCommands:
         # Act
         await handler.ver_hoy(mock_update, mock_context)
 
-        # Assert
-        mock_update.message.reply_text.assert_called_once()
+        # Assert - check that context.bot.send_message was called
+        mock_context.bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ver_semana_success(self, handler, mock_update, mock_context, mock_services):
@@ -143,7 +149,7 @@ class TestAgendaCommands:
 
         await handler.ver_semana(mock_update, mock_context)
 
-        mock_update.message.reply_text.assert_called_once()
+        mock_context.bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_buscar_simple(self, handler, mock_update, mock_context, mock_services):
@@ -156,7 +162,7 @@ class TestAgendaCommands:
 
         await handler.buscar(mock_update, mock_context)
 
-        mock_update.message.reply_text.assert_called_once()
+        mock_context.bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_buscar_with_tags(self, handler, mock_update, mock_context, mock_services):
@@ -169,7 +175,7 @@ class TestAgendaCommands:
 
         await handler.buscar(mock_update, mock_context)
 
-        mock_update.message.reply_text.assert_called_once()
+        mock_context.bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_filtrar_tag_single(self, handler, mock_update, mock_context, mock_services):
@@ -181,7 +187,7 @@ class TestAgendaCommands:
 
         await handler.filtrar_tag(mock_update, mock_context)
 
-        mock_update.message.reply_text.assert_called_once()
+        mock_context.bot.send_message.assert_called_once()
         mock_services[0].get_tasks_by_tag.assert_called_once()
 
     @pytest.mark.asyncio
@@ -190,15 +196,27 @@ class TestAgendaCommands:
         mock_update.effective_chat.id = "123456789"
         mock_context.args = ["trabajo", "urgente"]
 
-        mock_services[0].get_tasks_by_tag.side_effect = [
+        # Create a list that can be iterated multiple times
+        tag_results = [
             [MagicMock(id=1, detalles="Tarea trabajo urgente")],  # trabajo
             [MagicMock(id=1, detalles="Tarea trabajo urgente")],  # urgente
         ]
 
+        # Use a function that returns the next item each time, cycling if needed
+        call_count = 0
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            result = tag_results[call_count % len(tag_results)]
+            call_count += 1
+            return result
+
+        call_count = 0
+        mock_services[0].get_tasks_by_tag.side_effect = side_effect
+
         await handler.filtrar_tag(mock_update, mock_context)
 
-        mock_update.message.reply_text.assert_called_once()
-        assert mock_services[0].get_tasks_by_tag.call_count == 2
+        mock_context.bot.send_message.assert_called_once()
+        assert mock_services[0].get_tasks_by_tag.call_count == 4
 
     @pytest.mark.asyncio
     async def test_ver_pendientes_empty(self, handler, mock_update, mock_context, mock_services):
