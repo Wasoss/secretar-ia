@@ -11,6 +11,7 @@ from config.settings import settings
 from config.logging import get_logger
 from infrastructure.database.repositories.task_repo import TaskType
 import datetime
+import uuid
 
 logger = get_logger(__name__)
 

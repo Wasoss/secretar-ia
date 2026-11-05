@@ -46,11 +46,12 @@ ZONA_HORARIA = settings.tz
 # --- SERVIDOR WEB PARA RENDER (HEALTH CHECK) ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path in ["/", "/health", "/healthz"]:
+        if self.path in ["/", "/health", "/healthz", "/ping", "/keep-alive"]:
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
             self.end_headers()
-            self.wfile.write(b'{"status": "ok", "service": "secretar-ia"}')
+            self.wfile.write(b'{"status": "ok", "service": "secretar-ia", "timestamp": "%s"}' % str(int(datetime.datetime.now().timestamp())).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -118,6 +119,14 @@ async def _register_jobs(application: Application):
         interval=300,  # 5 minutos
         first=10,
         name="keep_alive_db"
+    )
+
+    # Keep-alive adicional: ping al bot cada 2 min para evitar spin-down del web service en Render free tier
+    application.job_queue.run_repeating(
+        keep_alive_bot_job,
+        interval=120,  # 2 minutos
+        first=5,
+        name="keep_alive_bot"
     )
 
     logger.info("jobs_registered", jobs=[

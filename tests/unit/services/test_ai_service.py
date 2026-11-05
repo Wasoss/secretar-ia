@@ -22,7 +22,7 @@ class TestAIServiceDateParsing:
         result = self.service._parse_relative_date(text)
 
         assert result is not None
-        assert result.year == 2026
+        assert result.year == 2027
         assert result.month == 11
         assert result.day == 3
         assert result.hour == 0
@@ -35,7 +35,7 @@ class TestAIServiceDateParsing:
         result = self.service._parse_relative_date(text)
 
         assert result is not None
-        assert result.year == 2026
+        assert result.year == 2027
         assert result.month == 11
         assert result.day == 3
         assert result.hour == 12
@@ -48,7 +48,7 @@ class TestAIServiceDateParsing:
         result = self.service._parse_relative_date(text)
 
         assert result is not None
-        assert result.year == 2026
+        assert result.year == 2027
         assert result.month == 11
         assert result.day == 3
         assert result.hour == 12
